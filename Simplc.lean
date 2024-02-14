@@ -12,6 +12,18 @@ def withoutModifingMVarAssignment (x : MetaM α) : MetaM α := do
   finally
     set saved
 
+def forallInstTelescope {α} (e : Expr) (n : Nat) (k : Expr → MetaM α) : MetaM α := do
+  match n with
+  | 0 => k e
+  | n+1 =>
+    let .forallE name d b bi := e | unreachable!
+    if (← isClass? d).isSome then
+      if let .some inst ← trySynthInstance d then
+        return ← forallInstTelescope (b.instantiate1 inst) n k
+
+    withLocalDecl name bi d fun x => do
+      forallInstTelescope (b.instantiate1 x) n k
+
 def mvarsToContext {α} (es : Array Expr) (e : Expr) (k : Expr → MetaM α) : MetaM α := do
   let e ← instantiateMVars e
   let mut s := { mctx := (← getMCtx), lctx := (← getLCtx), ngen := (← getNGen), abstractLevels := false }
@@ -22,11 +34,11 @@ def mvarsToContext {α} (es : Array Expr) (e : Expr) (k : Expr → MetaM α) : M
   setNGen s.ngen
   setMCtx s.mctx
   let e := s.lctx.mkForall s.fvars e
-  forallBoundedTelescope e (s.fvars.size) fun _ e => k e
+  forallInstTelescope e s.fvars.size k
 
 open Elab Tactic
 partial
-def checkSimpLC (thm1 thm2 : Name) : MetaM Unit := do
+def checkSimpLC (thm1 thm2 : Name) : MetaM Unit := withConfig (fun c => { c with etaStruct := .none }) do
   -- logInfo m!"Checking {thm1} and {thm2} for critical pairs"
   let prop1 ← inferType (← mkConstWithFreshMVarLevels thm1)
   let (hyps1, _, eq1) ← forallMetaTelescope prop1
@@ -53,7 +65,7 @@ def checkSimpLC (thm1 thm2 : Name) : MetaM Unit := do
 
     withoutModifingMVarAssignment do -- must not let MVar assignments escape here
       -- let (lhs1', rhs') ← Lean.Elab.Tactic.Conv.getLhsRhsCore cgoal
-      -- logInfo m!"eq2: {eq2}\nt: {t}\ncgoal: {(← cgoal.getType).consumeMData}"
+      logInfo m!"t: {t}\neq2: {eq2}"
       /-
       for mvar in ← getMVars t do
         logInfo m!"mvar {mvar} : {repr (← mvar.getKind)} {← mvar.isAssignable}"
@@ -100,38 +112,34 @@ def checkSimpLC (thm1 thm2 : Name) : MetaM Unit := do
           unless remaining_goals.isEmpty do
             logInfo <| msg ++ m!"\njoining failed with\n{goalsToMessageData remaining_goals}"
 
-    -- why is cgoal assigned here?
-    -- cgoal.refl
-
-    -- The following works, but sometimes `congr` complains
-    if t.isApp then do
-      let goals ←
-        try Lean.Elab.Tactic.Conv.congr cgoal
-        catch _ => pure []
-      let goals := goals.filterMap id
-      for hi : i in [:goals.length] do
-        withoutModifingMVarAssignment $ do
-          for hj : j in [:goals.length] do
-            if i ≠ j then goals[j].refl
-          go goals[i]
-
-    -- This should be simpler, but does not work, (the
-    -- isDefEqGuarded above fails) and I do not see why
-    /-
-    if let .app f x := t then
-      if (←inferType f).isArrow then
+    if true then
+      -- The following works, but sometimes `congr` complains
+      if t.isApp then do
+        let goals ←
+          try Lean.Elab.Tactic.Conv.congr cgoal
+          catch _ => pure []
+        let goals := goals.filterMap id
+        for hi : i in [:goals.length] do
+          withoutModifingMVarAssignment $ do
+            for hj : j in [:goals.length] do
+              if i ≠ j then goals[j].refl
+            go goals[i]
+    else
+      -- This should be simpler, but does not work, (the
+      -- isDefEqGuarded above fails) and I do not see why
+      if let .app f x := t then
+        if (←inferType f).isArrow then
+          withoutModifingMVarAssignment do
+            let (rhs, subgoal) ← Conv.mkConvGoalFor x
+            rhs.mvarId!.setKind .natural
+            goal.assign (← mkCongrArg f subgoal)
+            go subgoal.mvarId!
+        -- else logInfo m!"Cannot descend into dependent {f} in {t}"
         withoutModifingMVarAssignment do
-          let (rhs, subgoal) ← Conv.mkConvGoalFor x
+          let (rhs, subgoal) ← Conv.mkConvGoalFor f
           rhs.mvarId!.setKind .natural
-          goal.assign (← mkCongrArg f subgoal)
+          goal.assign (← mkCongrFun subgoal x)
           go subgoal.mvarId!
-      -- else logInfo m!"Cannot descend into dependent {f} in {t}"
-      withoutModifingMVarAssignment do
-        let (rhs, subgoal) ← Conv.mkConvGoalFor f
-        rhs.mvarId!.setKind .natural
-        goal.assign (← mkCongrFun subgoal x)
-        go subgoal.mvarId!
-    -/
 
 
 
@@ -146,7 +154,7 @@ def checkSimpLCAll : MetaM Unit := do
       if (`List).isPrefixOf n then
         names := names.push n
   logInfo m!"Found {names.size} simp lemmas"
-  names := names[:30]
+  names := names[:40]
   logInfo m!"Checking {names.size} simp lemmas for critical pairs"
   -- logInfo m!"{names}"
   for thm1 in names do
@@ -171,12 +179,10 @@ elab "check_simp_lc" : command => runTermElabM fun _ => do
 -- attribute [simp] Function.comp_def
 -- attribute [simp] List.map_filter
 -- check_simp_lc List.map_filter List.map_map
-/-
-attribute [-simp] List.map_map
-check_simp_lc List.map_map List.map_map
--/
+-- check_simp_lc List.map_map List.map_map
 
--- set_option trace.Meta.Tactic.simp true in
--- check_simp_lc List.indexesOf_nil List.replace_nil
+-- There is some unexpected unrolling of `range` happening here, despite
+-- `withReducible`
+-- check_simp_lc List.length_range List.tail_cons
 
 -- check_simp_lc
