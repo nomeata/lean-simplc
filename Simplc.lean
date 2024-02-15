@@ -74,55 +74,53 @@ def checkSimpLC (thm1 : SimpTheorem) (thms : SimpTheorems) (ignores : HashSet (N
       return
     -- logInfo m!"Looking at term {t}"
 
-    -- TODO: This is wrong, should move this inside the for thm2
-    -- but I am getting stack overflows
-    withoutModifingMVarAssignment do -- must not let MVar assignments escape here
-      -- logInfo m!"t: {t}\neq2: {eq2}"
-      -- logInfo m!"Discr: {thms.post}\nt: {t}"
-      let matchs := (← thms.pre.getUnify t simpDtConfig) ++ (← thms.post.getUnify t simpDtConfig)
-      let matchs := matchs.filter fun thm2 => ! thms.erased.contains thm2.origin
-      let matchs := matchs.filter fun thm2 => ! ignores.contains (thm1.origin.key, thm2.origin.key)
-      -- logInfo m!"Matches: {matchs}"
-      for thm2 in matchs do
-        let val2  ← thm2.getValue
-        let type2 ← inferType val2
-        let (hyps2, _bis, type2) ← forallMetaTelescopeReducing type2
-        let type ← whnf (← instantiateMVars type2)
-        -- let lhs := type.appFn!.appArg!
-        if ← withReducible (isDefEq (← cgoal.getType) type) then
-          cgoal.assign (val2.beta hyps2) -- TODO: Do we need this, or is the defeq enough?
-          let cp ← instantiateMVars lhs1
-          let e1 ← instantiateMVars rhs1
-          let e2 ← instantiateMVars rewritten
-          -- ignore trivial critical pairs:
-          if ← withReducible (isDefEqGuarded e1 e2) then return
-          -- logInfo msg
-          -- logInfo m!"Proof term:{indentExpr (← instantiateMVars (.mvar goal))}"
+    -- logInfo m!"t: {t}\neq2: {eq2}"
+    -- logInfo m!"Discr: {thms.post}\nt: {t}"
+    let matchs := (← thms.pre.getUnify t simpDtConfig) ++ (← thms.post.getUnify t simpDtConfig)
+    let matchs := matchs.filter fun thm2 => ! thms.erased.contains thm2.origin
+    let matchs := matchs.filter fun thm2 => ! ignores.contains (thm1.origin.key, thm2.origin.key)
+    -- logInfo m!"Matches: {matchs}"
+    -- TODO: Without the [:1] I am getting stack overflows here
+    for thm2 in matchs[:1] do withoutModifingMVarAssignment do
+      let val2  ← thm2.getValue
+      let type2 ← inferType val2
+      let (hyps2, _bis, type2) ← forallMetaTelescopeReducing type2
+      let type ← whnf (← instantiateMVars type2)
+      -- let lhs := type.appFn!.appArg!
+      if ← withReducible (isDefEq (← cgoal.getType) type) then
+        cgoal.assign (val2.beta hyps2) -- TODO: Do we need this, or is the defeq enough?
+        let cp ← instantiateMVars lhs1
+        let e1 ← instantiateMVars rhs1
+        let e2 ← instantiateMVars rewritten
+        -- ignore trivial critical pairs:
+        if ← withReducible (isDefEqGuarded e1 e2) then return
+        -- logInfo msg
+        -- logInfo m!"Proof term:{indentExpr (← instantiateMVars (.mvar goal))}"
 
-          let goal ← mkEq e1 e2
-          mvarsToContext (hyps1 ++ hyps2) goal fun goal => do
-            check goal
-            -- TODO: Feed these through mvarsToContext, too, for prettier output
-            let cp ← instantiateMVars cp
-            let e1 ← instantiateMVars e1
-            let e2 ← instantiateMVars e2
+        let goal ← mkEq e1 e2
+        mvarsToContext (hyps1 ++ hyps2) goal fun goal => do
+          check goal
+          -- TODO: Feed these through mvarsToContext, too, for prettier output
+          let cp ← instantiateMVars cp
+          let e1 ← instantiateMVars e1
+          let e2 ← instantiateMVars e2
 
-            let msg :=
-              m!"The rules\n    {← My.ppOrigin thm1.origin} {← My.ppOrigin thm2.origin}\nproduce a critical pair. Expression{indentExpr cp}\n" ++
-              m!"reduces to{indentExpr e1}\n" ++
-              m!"as well as{indentExpr e2}"
+          let msg :=
+            m!"The rules\n    {← My.ppOrigin thm1.origin} {← My.ppOrigin thm2.origin}\nproduce a critical pair. Expression{indentExpr cp}\n" ++
+            m!"reduces to{indentExpr e1}\n" ++
+            m!"as well as{indentExpr e2}"
 
-            let .mvar simp_goal ← mkFreshExprSyntheticOpaqueMVar goal
-              | unreachable!
-            let (_, simp_goal) ← simp_goal.intros
-            check (mkMVar simp_goal)
-            let (remaining_goals, _) ← simp_goal.withContext do
-              runTactic simp_goal (← `(tactic|(
-                try contradiction
-                try simp [*]
-              )))
-            unless remaining_goals.isEmpty do
-              logInfo <| msg ++ m!"\njoining failed with\n{goalsToMessageData remaining_goals}"
+          let .mvar simp_goal ← mkFreshExprSyntheticOpaqueMVar goal
+            | unreachable!
+          let (_, simp_goal) ← simp_goal.intros
+          check (mkMVar simp_goal)
+          let (remaining_goals, _) ← simp_goal.withContext do
+            runTactic simp_goal (← `(tactic|(
+              try contradiction
+              try simp [*]
+            )))
+          unless remaining_goals.isEmpty do
+            logInfo <| msg ++ m!"\njoining failed with\n{goalsToMessageData remaining_goals}"
 
     if true then
       -- The following works, but sometimes `congr` complains
@@ -182,7 +180,6 @@ def checkSimpLCAll (ignores : HashSet (Name × Name) := {}): MetaM Unit := do
       if (`List).isPrefixOf n then
         return true
     return false
-  logInfo m!"Found {thms.size} simp lemmas"
   logInfo m!"Checking {thms.size} simp lemmas for critical pairs"
   let filtered_sthms := thms.foldl Lean.Meta.addSimpTheoremEntry (init := {})
   -- logInfo m!"{names}"
@@ -359,6 +356,34 @@ check_simp_lc ignoring
   List.sizeOf_get List.get_set_ne
   List.sizeOf_get List.get_dropLast
   List.sizeOf_get List.get_cons_zero
-  -- List.sizeOf_get List.get_cons_succ' stack overflow
+  List.sizeOf_get List.get_cons_succ
+  List.sizeOf_get List.get_cons_succ'
+  List.sizeOf_get List.get_cons_cons_one
   List.sizeOf_get List.cons.sizeOf_spec
   List.append_cancel_left_eq List.append_nil
+
+  List.nil_eq_append List.append_nil
+
+  List.drop_length List.length_replicate
+  List.drop_length List.length_zipWith
+  List.drop_length List.length_concat
+  List.drop_length List.length_map
+  List.drop_length List.length_set
+  List.drop_length List.length_dropLast
+  List.drop_length List.length_dropLast_cons
+  List.drop_length List.length_tail
+
+  List.drop_left List.length_replicate
+  List.drop_left List.length_zipWith
+  List.drop_left List.length_concat
+  List.drop_left List.length_map
+  List.drop_left List.length_set
+  List.drop_left List.length_dropLast
+  List.drop_left List.length_dropLast_cons
+  List.drop_left List.length_tail
+
+  List.filter_filter List.filter_cons_of_pos
+
+  List.zipWith_map List.map_map
+  List.zipWith_map List.map_cons
+  List.zipWith_map List.map_append
