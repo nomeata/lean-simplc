@@ -38,10 +38,9 @@ def forallInstTelescope {α} (e : Expr) (n : Nat) (k : Expr → MetaM α) : Meta
     withLocalDecl name bi d fun x => do
       forallInstTelescope (b.instantiate1 x) n k
 
-def mvarsToContext (es : Array Expr) (e : Expr) :
-    MetaM (Array Name × Nat × Expr) := do
+def mvarsToContext {α} (es : Array Expr) (e : Expr) (k : Expr → MetaM α) : MetaM α := do
   let e ← instantiateMVars e
-  let mut s := { mctx := (← getMCtx), lctx := (← getLCtx), ngen := (← getNGen), abstractLevels := true }
+  let mut s := { mctx := (← getMCtx), lctx := (← getLCtx), ngen := (← getNGen), abstractLevels := false }
   for e' in es do
     (_, s) := AbstractMVars.abstractExprMVars e' s
   let (e, s') := AbstractMVars.abstractExprMVars e s
@@ -49,28 +48,7 @@ def mvarsToContext (es : Array Expr) (e : Expr) :
   setNGen s.ngen
   setMCtx s.mctx
   let e := s.lctx.mkForall s.fvars e
-  return (s.paramNames, s.fvars.size, e)
-
-def CriticalPair := (MessageData × Array Name × Nat × Expr)
-
-open Elab Tactic in
-def checkCriticalPair : CriticalPair → MetaM Unit | (msg, paramNames, nhyps, goal) => do
-  let us ← paramNames.mapM fun _ => mkFreshLevelMVar
-  let goal := goal.instantiateLevelParamsArray paramNames us
-  -- logInfo m!"{goal}"
-  forallBoundedTelescope goal nhyps fun _ goal => do
-    let .mvar simp_goal ← mkFreshExprSyntheticOpaqueMVar goal
-      | unreachable!
-    -- let (_, simp_goal) ← simp_goal.intros
-    check (mkMVar simp_goal)
-    let (remaining_goals, _) ← simp_goal.withContext do
-      runTactic simp_goal (← `(tactic|(
-        try contradiction
-        try simp [*]
-      )))
-    unless remaining_goals.isEmpty do
-      logInfo <| msg ++ m!"\njoining failed with\n{goalsToMessageData remaining_goals}"
-
+  forallInstTelescope e s.fvars.size k
 
 open Elab Tactic
 partial
@@ -119,13 +97,30 @@ def checkSimpLC (thm1 : SimpTheorem) (thms : SimpTheorems) (ignores : HashSet (N
         -- logInfo msg
         -- logInfo m!"Proof term:{indentExpr (← instantiateMVars (.mvar goal))}"
 
-        let msg :=
-          m!"The rules\n    {← My.ppOrigin thm1.origin} {← My.ppOrigin thm2.origin}\nproduce a critical pair. Expression{indentExpr cp}\n" ++
-          m!"reduces to{indentExpr e1}\n" ++
-          m!"as well as{indentExpr e2}"
+        let goal ← mkEq e1 e2
+        mvarsToContext (hyps1 ++ hyps2) goal fun goal => do
+          check goal
+          -- TODO: Feed these through mvarsToContext, too, for prettier output
+          let cp ← instantiateMVars cp
+          let e1 ← instantiateMVars e1
+          let e2 ← instantiateMVars e2
 
-        let goal ← mvarsToContext (hyps1 ++ hyps2) (← mkEq e1 e2)
-        checkCriticalPair (msg, goal)
+          let msg :=
+            m!"The rules\n    {← My.ppOrigin thm1.origin} {← My.ppOrigin thm2.origin}\nproduce a critical pair. Expression{indentExpr cp}\n" ++
+            m!"reduces to{indentExpr e1}\n" ++
+            m!"as well as{indentExpr e2}"
+
+          let .mvar simp_goal ← mkFreshExprSyntheticOpaqueMVar goal
+            | unreachable!
+          let (_, simp_goal) ← simp_goal.intros
+          check (mkMVar simp_goal)
+          let (remaining_goals, _) ← simp_goal.withContext do
+            runTactic simp_goal (← `(tactic|(
+              try contradiction
+              try simp [*]
+            )))
+          unless remaining_goals.isEmpty do
+            logInfo <| msg ++ m!"\njoining failed with\n{goalsToMessageData remaining_goals}"
 
     if true then
       -- The following works, but sometimes `congr` complains
@@ -219,11 +214,10 @@ elab "check_simp_lc " ign:ignores : command => runTermElabM fun _ => do
 attribute [simp] Function.comp_def
 -- fixes
 -- check_simp_lc List.map_map List.map_map
--- check_simp_lc List.map_id' List.map_map
 
 @[simp] theorem takeWhile_nil : List.takeWhile p [] = [] := rfl
 -- fixes
--- check_simp_lc List.takeWhile_append_dropWhile List.dropWhile_nil
+check_simp_lc List.takeWhile_append_dropWhile List.dropWhile_nil
 
 attribute [simp] List.foldrM
 -- fixes
@@ -247,10 +241,6 @@ attribute [simp] List.nil_suffix
 attribute [simp] List.nil_prefix
 attribute [simp] List.nil_infix
 
-check_simp_lc List.reverse_sublist List.Sublist.refl
-
-
-#exit
 
 check_simp_lc ignoring
   List.disjoint_cons_left List.disjoint_cons_right
