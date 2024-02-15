@@ -74,6 +74,8 @@ def checkSimpLC (thm1 : SimpTheorem) (thms : SimpTheorems) (ignores : HashSet (N
       return
     -- logInfo m!"Looking at term {t}"
 
+    -- TODO: This is wrong, should move this inside the for thm2
+    -- but I am getting stack overflows
     withoutModifingMVarAssignment do -- must not let MVar assignments escape here
       -- logInfo m!"t: {t}\neq2: {eq2}"
       -- logInfo m!"Discr: {thms.post}\nt: {t}"
