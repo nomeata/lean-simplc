@@ -8,10 +8,6 @@ attribute [simp] Function.comp_def
 -- fixes
 check_simp_lc List.takeWhile_append_dropWhile List.dropWhile_nil
 
-attribute [simp] List.foldrM
--- fixes
--- check_simp_lc List.foldlM_reverse List.reverse_cons
-
 attribute [simp] or_assoc
 attribute [simp] and_assoc
 -- fixes
@@ -445,3 +441,12 @@ check_simp_lc ignoring
   List.zipWith_map List.map_id
   List.zipWith_map List.enumFrom_map_fst
   List.zipWith_map List.enum_map_fst
+
+  List.foldlM_reverse List.reverse_cons
+  List.foldlM_reverse List.reverse_append
+  List.foldrM_reverse List.reverse_cons
+  List.foldrM_reverse List.reverse_append
+
+  List.foldrM_append List.takeWhile_append_dropWhile
+  List.foldrM_append List.take_append_drop
+  List.foldrM_append List.range'_append_1

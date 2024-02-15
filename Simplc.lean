@@ -82,6 +82,7 @@ def checkSimpLC (thm1 : SimpTheorem) (thms : SimpTheorems)
     let matchs := matchs.filter fun thm2 => ! thms.erased.contains thm2.origin
     let matchs := matchs.filter fun thm2 => ! ignores.contains (thm1.origin.key, thm2.origin.key)
     -- logInfo m!"Matches: {matchs}"
+    -- IO.println f!"matches: {matchs}"
     -- TODO: Without the [:1] I am getting stack overflows here
     for thm2 in matchs do withoutModifingMVarAssignment do
       let val2  ← thm2.getValue
@@ -168,9 +169,7 @@ def mkSimpTheorem (name : Name) : MetaM SimpTheorem := do
 
 -- Exclude these from checking all
 def lcBlacklist : Array Name := #[
-  ``List.foldrM_append,    -- causes it to run out of stack space
-  ``List.getElem?_eq_get?, -- oddness with .refl and Decidable
-  ``List.foldrM_reverse    -- also stack overflow
+  ``List.getElem?_eq_get?  -- oddness with .refl and Decidable
   ]
 
 def checkSimpLCAll (ignores : HashSet (Name × Name) := {}): MetaM Unit := do
@@ -195,10 +194,10 @@ def checkSimpLCAll (ignores : HashSet (Name × Name) := {}): MetaM Unit := do
     catch e => logError m!"Failed to check {← My.ppOrigin thm1.origin}\n{← nestedExceptionToMessageData e}"
 
 open Elab Command in
-elab "check_simp_lc " thm1:ident thm2:ident : command => runTermElabM fun _ => do
-  let thm1 ← resolveGlobalConstNoOverload thm1
-  let thm2 ← resolveGlobalConstNoOverload thm2
-  checkSimpLC (← mkSimpTheorem thm1) (← mkSimpTheorems thm2) (verbose := true)
+elab "check_simp_lc " thms:ident+ : command => runTermElabM fun _ => do
+  let names ← thms.mapM resolveGlobalConstNoOverloadWithInfo
+  let sthms ← names.foldlM (fun sthms name => sthms.addConst name) {}
+  checkSimpLC (← mkSimpTheorem names[0]!) sthms (verbose := true)
 
 
 open Parser Term Tactic in
@@ -210,8 +209,8 @@ open Elab Command in
 elab "check_simp_lc " ign:ignores : command => runTermElabM fun _ => do
   let ignores ← match ign with
     | `(ignores|ignoring $[$i1:ident $i2:ident]*) => do
-      let thm1s ← i1.mapM resolveGlobalConstNoOverload
-      let thm2s ← i2.mapM resolveGlobalConstNoOverload
+      let thm1s ← i1.mapM resolveGlobalConstNoOverloadWithInfo
+      let thm2s ← i2.mapM resolveGlobalConstNoOverloadWithInfo
       pure (HashSet.ofArray (thm1s.zip thm2s))
     | _ => pure {}
   checkSimpLCAll ignores
