@@ -8,5 +8,6 @@ require std from git "https://github.com/leanprover/std4" @ "bump/v4.6.0"
 
 @[default_target]
 lean_lib «Simplc» where
+  globs := #[.andSubmodules `Simplc]
   precompileModules := true
   -- add library configuration options here
