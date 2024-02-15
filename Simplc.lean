@@ -38,7 +38,7 @@ def mvarsToContext {α} (es : Array Expr) (e : Expr) (k : Expr → MetaM α) : M
 
 open Elab Tactic
 partial
-def checkSimpLC (thm1 thm2 : Name) : MetaM Unit := withConfig (fun c => { c with etaStruct := .none }) do
+def checkSimpLC (thm1 : Name) (sthm2 : SimpTheorem) : MetaM Unit := withConfig (fun c => { c with etaStruct := .none }) do
   -- logInfo m!"Checking {thm1} and {thm2} for critical pairs"
   let prop1 ← inferType (← mkConstWithFreshMVarLevels thm1)
   let (hyps1, _, eq1) ← forallMetaTelescope prop1
@@ -46,12 +46,14 @@ def checkSimpLC (thm1 thm2 : Name) : MetaM Unit := withConfig (fun c => { c with
     | return -- logError m!"Expected equality in conclusion of {thm1}:{indentExpr eq1}"
 
 
+  /-
   let c2 ← mkConstWithFreshMVarLevels thm2
   let prop2 ← inferType c2
   let (hyps2, _, eq2) ← forallMetaTelescope prop2
   let eq2Proof := mkAppN c2 hyps2
   let some (_, _lhs2, _rhs2) := eq2.eq?
     | return -- logError m!"Expected equality in conclusion of {thm2}:{indentExpr eq2}"
+  -/
 
   let (rewritten, Expr.mvar goal) ← Conv.mkConvGoalFor lhs1 | unreachable!
   -- logInfo m!"Initial goal: {goal}"
@@ -64,24 +66,22 @@ def checkSimpLC (thm1 thm2 : Name) : MetaM Unit := withConfig (fun c => { c with
     -- logInfo m!"Looking at term {t}"
 
     withoutModifingMVarAssignment do -- must not let MVar assignments escape here
-      -- let (lhs1', rhs') ← Lean.Elab.Tactic.Conv.getLhsRhsCore cgoal
-      logInfo m!"t: {t}\neq2: {eq2}"
-      /-
-      for mvar in ← getMVars t do
-        logInfo m!"mvar {mvar} : {repr (← mvar.getKind)} {← mvar.isAssignable}"
-      for mvar in ← getMVars eq2 do
-        logInfo m!"mvar {mvar} : {repr (← mvar.getKind)} {← mvar.isAssignable}"
-      -/
+      -- logInfo m!"t: {t}\neq2: {eq2}"
 
-      if ← withReducible (isDefEqGuarded (mkMVar cgoal) eq2Proof) then
-        -- logInfo m!"goal: {cgoal}"
+      let val  ← sthm2.getValue
+      let type ← inferType val
+      let (hyps2, _bis, type) ← forallMetaTelescopeReducing type
+      let type ← whnf (← instantiateMVars type)
+      -- let lhs := type.appFn!.appArg!
+      if ← withReducible (isDefEq (← cgoal.getType) type) then
+        cgoal.assign (val.beta hyps2)
         let cp ← instantiateMVars lhs1
         let e1 ← instantiateMVars rhs1
         let e2 ← instantiateMVars rewritten
         -- ignore trivial critical pairs:
         if ← withReducible (isDefEqGuarded e1 e2) then return
         let msg :=
-          m!"The rules {ppConst (← mkConstWithLevelParams thm1)} and {ppConst (← mkConstWithLevelParams thm2)} produce a critical pair. Expression{indentExpr cp}\n" ++
+          m!"The rules {ppConst (← mkConstWithLevelParams thm1)} and {sthm2} produce a critical pair. Expression{indentExpr cp}\n" ++
           m!"reduces to{indentExpr e1}\n" ++
           m!"as well as{indentExpr e2}"
 
@@ -141,8 +141,6 @@ def checkSimpLC (thm1 thm2 : Name) : MetaM Unit := withConfig (fun c => { c with
           goal.assign (← mkCongrFun subgoal x)
           go subgoal.mvarId!
 
-
-
   go goal
 
 
@@ -154,35 +152,45 @@ def checkSimpLCAll : MetaM Unit := do
       if (`List).isPrefixOf n then
         names := names.push n
   logInfo m!"Found {names.size} simp lemmas"
-  names := names[:40]
+  names := names[:100]
   logInfo m!"Checking {names.size} simp lemmas for critical pairs"
   -- logInfo m!"{names}"
   for thm1 in names do
     for thm2 in names do
-      if thm1 != thm2 then
-        checkSimpLC thm1 thm2
+      let sthms : SimpTheorems := {}
+      let sthms ← sthms.addConst thm2
+      let sthms := sthms.pre.values ++ sthms.post.values
+      checkSimpLC thm1 sthms[0]!
 
 
 open Elab Command in
 elab "check_simp_lc " thm1:ident thm2:ident : command => runTermElabM fun _ => do
   let thm1 ← resolveGlobalConstNoOverload thm1
   let thm2 ← resolveGlobalConstNoOverload thm2
-  checkSimpLC thm1 thm2
+  let sthms : SimpTheorems := {}
+  let sthms ← sthms.addConst thm2
+  let sthms := sthms.pre.values ++ sthms.post.values
+  checkSimpLC thm1 sthms[0]!
 
 open Elab Command in
 elab "check_simp_lc" : command => runTermElabM fun _ => do
   checkSimpLCAll
 
--- check_simp_lc List.eraseP_cons_of_pos List.intersperse_cons₂
-
-
 -- attribute [simp] Function.comp_def
--- attribute [simp] List.map_filter
--- check_simp_lc List.map_filter List.map_map
+-- fixes
 -- check_simp_lc List.map_map List.map_map
 
--- There is some unexpected unrolling of `range` happening here, despite
--- `withReducible`
--- check_simp_lc List.length_range List.tail_cons
+@[simp] theorem takeWhile_nil : List.takeWhile p [] = [] := rfl
+-- fixes
+-- check_simp_lc List.takeWhile_append_dropWhile List.dropWhile_nil
 
--- check_simp_lc
+attribute [simp] List.foldrM
+-- fixes
+-- check_simp_lc List.foldlM_reverse List.reverse_cons
+
+attribute [-simp] List.takeWhile_append_dropWhile
+-- fixes many lemmas
+
+set_option profiler true
+
+check_simp_lc
