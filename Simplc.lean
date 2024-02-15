@@ -52,10 +52,12 @@ def mvarsToContext {α} (es : Array Expr) (e : Expr) (k : Expr → MetaM α) : M
 
 open Elab Tactic
 partial
-def checkSimpLC (thm1 : SimpTheorem) (thms : SimpTheorems) (ignores : HashSet (Name × Name) := {})
+def checkSimpLC (thm1 : SimpTheorem) (thms : SimpTheorems)
+    (ignores : HashSet (Name × Name) := {})
+    (verbose : Bool := false)
     : MetaM Unit := withConfig (fun c => { c with etaStruct := .none }) do
 
-  -- logInfo m!"Checking {thm1} and {thm2} for critical pairs"
+  -- IO.println f!"Checking {thm1} for critical pairs"
 
   let val1 ← thm1.getValue
   let type1 ← inferType val1
@@ -81,7 +83,7 @@ def checkSimpLC (thm1 : SimpTheorem) (thms : SimpTheorems) (ignores : HashSet (N
     let matchs := matchs.filter fun thm2 => ! ignores.contains (thm1.origin.key, thm2.origin.key)
     -- logInfo m!"Matches: {matchs}"
     -- TODO: Without the [:1] I am getting stack overflows here
-    for thm2 in matchs[:1] do withoutModifingMVarAssignment do
+    for thm2 in matchs do withoutModifingMVarAssignment do
       let val2  ← thm2.getValue
       let type2 ← inferType val2
       let (hyps2, _bis, type2) ← forallMetaTelescopeReducing type2
@@ -100,16 +102,6 @@ def checkSimpLC (thm1 : SimpTheorem) (thms : SimpTheorems) (ignores : HashSet (N
         let goal ← mkEq e1 e2
         mvarsToContext (hyps1 ++ hyps2) goal fun goal => do
           check goal
-          -- TODO: Feed these through mvarsToContext, too, for prettier output
-          let cp ← instantiateMVars cp
-          let e1 ← instantiateMVars e1
-          let e2 ← instantiateMVars e2
-
-          let msg :=
-            m!"The rules\n    {← My.ppOrigin thm1.origin} {← My.ppOrigin thm2.origin}\nproduce a critical pair. Expression{indentExpr cp}\n" ++
-            m!"reduces to{indentExpr e1}\n" ++
-            m!"as well as{indentExpr e2}"
-
           let .mvar simp_goal ← mkFreshExprSyntheticOpaqueMVar goal
             | unreachable!
           let (_, simp_goal) ← simp_goal.intros
@@ -120,7 +112,19 @@ def checkSimpLC (thm1 : SimpTheorem) (thms : SimpTheorems) (ignores : HashSet (N
               try simp [*]
             )))
           unless remaining_goals.isEmpty do
-            logInfo <| msg ++ m!"\njoining failed with\n{goalsToMessageData remaining_goals}"
+            if verbose then
+              -- TODO: Feed these through mvarsToContext, too, for prettier output
+              let cp ← instantiateMVars cp
+              let e1 ← instantiateMVars e1
+              let e2 ← instantiateMVars e2
+
+              logInfo <|
+                m!"The rules\n    {← My.ppOrigin thm1.origin} {← My.ppOrigin thm2.origin}\nproduce a critical pair. Expression{indentExpr cp}\n" ++
+                m!"reduces to{indentExpr e1}\n" ++
+                m!"as well as{indentExpr e2}\n" ++
+                m!"joining failed with\n{goalsToMessageData remaining_goals}"
+            else
+              logInfo m!"  {← My.ppOrigin thm1.origin} {← My.ppOrigin thm2.origin}"
 
     if true then
       -- The following works, but sometimes `congr` complains
@@ -165,7 +169,8 @@ def mkSimpTheorem (name : Name) : MetaM SimpTheorem := do
 -- Exclude these from checking all
 def lcBlacklist : Array Name := #[
   ``List.foldrM_append,    -- causes it to run out of stack space
-  ``List.getElem?_eq_get?  -- oddness with .refl and Decidable
+  ``List.getElem?_eq_get?, -- oddness with .refl and Decidable
+  ``List.foldrM_reverse    -- also stack overflow
   ]
 
 def checkSimpLCAll (ignores : HashSet (Name × Name) := {}): MetaM Unit := do
@@ -186,14 +191,14 @@ def checkSimpLCAll (ignores : HashSet (Name × Name) := {}): MetaM Unit := do
   -- let thms := thms[:104] ++ thms[105:]
   for thm1 in thms do
     try
-      checkSimpLC thm1 filtered_sthms (ignores := ignores)
+      checkSimpLC thm1 filtered_sthms (ignores := ignores) (verbose := false)
     catch e => logError m!"Failed to check {← My.ppOrigin thm1.origin}\n{← nestedExceptionToMessageData e}"
 
 open Elab Command in
 elab "check_simp_lc " thm1:ident thm2:ident : command => runTermElabM fun _ => do
   let thm1 ← resolveGlobalConstNoOverload thm1
   let thm2 ← resolveGlobalConstNoOverload thm2
-  checkSimpLC (← mkSimpTheorem thm1) (← mkSimpTheorems thm2)
+  checkSimpLC (← mkSimpTheorem thm1) (← mkSimpTheorems thm2) (verbose := true)
 
 
 open Parser Term Tactic in
