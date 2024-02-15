@@ -5,6 +5,19 @@ import Std.Lean.Delaborator
 
 open Lean Meta
 
+-- using ppConst
+def My.ppOrigin [Monad m] [MonadEnv m] [MonadError m] : Origin → m MessageData
+  | .decl n post inv => do
+    let r ← mkConstWithLevelParams n;
+    match post, inv with
+    | true,  true  => return m!"← {ppConst r}"
+    | true,  false => return m!"{ppConst r}"
+    | false, true  => return m!"↓ ← {ppConst r}"
+    | false, false => return m!"↓ {ppConst r}"
+  | .fvar n => return mkFVar n
+  | .stx _ ref => return ref
+  | .other n => return n
+
 def withoutModifingMVarAssignment (x : MetaM α) : MetaM α := do
   let saved ← get
   try
@@ -38,10 +51,13 @@ def mvarsToContext {α} (es : Array Expr) (e : Expr) (k : Expr → MetaM α) : M
 
 open Elab Tactic
 partial
-def checkSimpLC (thm1 : Name) (sthm2 : SimpTheorem) : MetaM Unit := withConfig (fun c => { c with etaStruct := .none }) do
+def checkSimpLC (thm1 thm2 : SimpTheorem) : MetaM Unit := withConfig (fun c => { c with etaStruct := .none }) do
   -- logInfo m!"Checking {thm1} and {thm2} for critical pairs"
-  let prop1 ← inferType (← mkConstWithFreshMVarLevels thm1)
-  let (hyps1, _, eq1) ← forallMetaTelescope prop1
+
+  let val1 ← thm1.getValue
+  let type1 ← inferType val1
+  let (hyps1, _bis, eq1) ← forallMetaTelescopeReducing type1
+  let eq1 ← whnf (← instantiateMVars eq1)
   let some (_, lhs1, rhs1) := eq1.eq?
     | return -- logError m!"Expected equality in conclusion of {thm1}:{indentExpr eq1}"
 
@@ -68,20 +84,20 @@ def checkSimpLC (thm1 : Name) (sthm2 : SimpTheorem) : MetaM Unit := withConfig (
     withoutModifingMVarAssignment do -- must not let MVar assignments escape here
       -- logInfo m!"t: {t}\neq2: {eq2}"
 
-      let val  ← sthm2.getValue
-      let type ← inferType val
-      let (hyps2, _bis, type) ← forallMetaTelescopeReducing type
-      let type ← whnf (← instantiateMVars type)
+      let val2  ← thm2.getValue
+      let type2 ← inferType val2
+      let (hyps2, _bis, type2) ← forallMetaTelescopeReducing type2
+      let type ← whnf (← instantiateMVars type2)
       -- let lhs := type.appFn!.appArg!
       if ← withReducible (isDefEq (← cgoal.getType) type) then
-        cgoal.assign (val.beta hyps2)
+        cgoal.assign (val2.beta hyps2) -- TODO: Do we need this, or is the defeq enough?
         let cp ← instantiateMVars lhs1
         let e1 ← instantiateMVars rhs1
         let e2 ← instantiateMVars rewritten
         -- ignore trivial critical pairs:
         if ← withReducible (isDefEqGuarded e1 e2) then return
         let msg :=
-          m!"The rules {ppConst (← mkConstWithLevelParams thm1)} and {sthm2} produce a critical pair. Expression{indentExpr cp}\n" ++
+          m!"The rules {← My.ppOrigin thm1.origin} and {← My.ppOrigin thm2.origin} produce a critical pair. Expression{indentExpr cp}\n" ++
           m!"reduces to{indentExpr e1}\n" ++
           m!"as well as{indentExpr e2}"
 
@@ -144,6 +160,12 @@ def checkSimpLC (thm1 : Name) (sthm2 : SimpTheorem) : MetaM Unit := withConfig (
   go goal
 
 
+def mkSimpTheorem (name : Name) : MetaM SimpTheorem := do
+  let sthms : SimpTheorems := {}
+  let sthms ← sthms.addConst name
+  let sthms := sthms.pre.values ++ sthms.post.values
+  return sthms[0]!
+
 def checkSimpLCAll : MetaM Unit := do
   let thms ← getSimpTheorems
   let mut names := #[]
@@ -152,45 +174,39 @@ def checkSimpLCAll : MetaM Unit := do
       if (`List).isPrefixOf n then
         names := names.push n
   logInfo m!"Found {names.size} simp lemmas"
-  names := names[:100]
+  names := names[:40]
   logInfo m!"Checking {names.size} simp lemmas for critical pairs"
   -- logInfo m!"{names}"
   for thm1 in names do
     for thm2 in names do
-      let sthms : SimpTheorems := {}
-      let sthms ← sthms.addConst thm2
-      let sthms := sthms.pre.values ++ sthms.post.values
-      checkSimpLC thm1 sthms[0]!
+      checkSimpLC (← mkSimpTheorem thm1) (← mkSimpTheorem thm2)
 
 
 open Elab Command in
 elab "check_simp_lc " thm1:ident thm2:ident : command => runTermElabM fun _ => do
   let thm1 ← resolveGlobalConstNoOverload thm1
   let thm2 ← resolveGlobalConstNoOverload thm2
-  let sthms : SimpTheorems := {}
-  let sthms ← sthms.addConst thm2
-  let sthms := sthms.pre.values ++ sthms.post.values
-  checkSimpLC thm1 sthms[0]!
+  checkSimpLC (← mkSimpTheorem thm1) (← mkSimpTheorem thm2)
 
 open Elab Command in
 elab "check_simp_lc" : command => runTermElabM fun _ => do
   checkSimpLCAll
 
--- attribute [simp] Function.comp_def
+attribute [simp] Function.comp_def
 -- fixes
 -- check_simp_lc List.map_map List.map_map
 
 @[simp] theorem takeWhile_nil : List.takeWhile p [] = [] := rfl
 -- fixes
--- check_simp_lc List.takeWhile_append_dropWhile List.dropWhile_nil
+check_simp_lc List.takeWhile_append_dropWhile List.dropWhile_nil
 
 attribute [simp] List.foldrM
 -- fixes
--- check_simp_lc List.foldlM_reverse List.reverse_cons
+check_simp_lc List.foldlM_reverse List.reverse_cons
 
 attribute [-simp] List.takeWhile_append_dropWhile
 -- fixes many lemmas
 
 set_option profiler true
 
-check_simp_lc
+-- check_simp_lc
