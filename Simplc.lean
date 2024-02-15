@@ -51,7 +51,7 @@ def mvarsToContext {α} (es : Array Expr) (e : Expr) (k : Expr → MetaM α) : M
 
 open Elab Tactic
 partial
-def checkSimpLC (thm1 thm2 : SimpTheorem) : MetaM Unit := withConfig (fun c => { c with etaStruct := .none }) do
+def checkSimpLC (thm1 : SimpTheorem) (thms : SimpTheorems): MetaM Unit := withConfig (fun c => { c with etaStruct := .none }) do
   -- logInfo m!"Checking {thm1} and {thm2} for critical pairs"
 
   let val1 ← thm1.getValue
@@ -60,16 +60,6 @@ def checkSimpLC (thm1 thm2 : SimpTheorem) : MetaM Unit := withConfig (fun c => {
   let eq1 ← whnf (← instantiateMVars eq1)
   let some (_, lhs1, rhs1) := eq1.eq?
     | return -- logError m!"Expected equality in conclusion of {thm1}:{indentExpr eq1}"
-
-
-  /-
-  let c2 ← mkConstWithFreshMVarLevels thm2
-  let prop2 ← inferType c2
-  let (hyps2, _, eq2) ← forallMetaTelescope prop2
-  let eq2Proof := mkAppN c2 hyps2
-  let some (_, _lhs2, _rhs2) := eq2.eq?
-    | return -- logError m!"Expected equality in conclusion of {thm2}:{indentExpr eq2}"
-  -/
 
   let (rewritten, Expr.mvar goal) ← Conv.mkConvGoalFor lhs1 | unreachable!
   -- logInfo m!"Initial goal: {goal}"
@@ -83,50 +73,50 @@ def checkSimpLC (thm1 thm2 : SimpTheorem) : MetaM Unit := withConfig (fun c => {
 
     withoutModifingMVarAssignment do -- must not let MVar assignments escape here
       -- logInfo m!"t: {t}\neq2: {eq2}"
+      -- logInfo m!"Discr: {thms.post}\nt: {t}"
+      let matchs := (← thms.pre.getUnify t simpDtConfig) ++ (← thms.post.getUnify t simpDtConfig)
+      let matchs := matchs.filter fun thm2 => ! thms.erased.contains thm2.origin
+      -- logInfo m!"Matches: {matchs}"
+      for thm2 in matchs do
+        let val2  ← thm2.getValue
+        let type2 ← inferType val2
+        let (hyps2, _bis, type2) ← forallMetaTelescopeReducing type2
+        let type ← whnf (← instantiateMVars type2)
+        -- let lhs := type.appFn!.appArg!
+        if ← withReducible (isDefEq (← cgoal.getType) type) then
+          cgoal.assign (val2.beta hyps2) -- TODO: Do we need this, or is the defeq enough?
+          let cp ← instantiateMVars lhs1
+          let e1 ← instantiateMVars rhs1
+          let e2 ← instantiateMVars rewritten
+          -- ignore trivial critical pairs:
+          if ← withReducible (isDefEqGuarded e1 e2) then return
+          -- logInfo msg
+          -- logInfo m!"Proof term:{indentExpr (← instantiateMVars (.mvar goal))}"
 
-      let val2  ← thm2.getValue
-      let type2 ← inferType val2
-      let (hyps2, _bis, type2) ← forallMetaTelescopeReducing type2
-      let type ← whnf (← instantiateMVars type2)
-      -- let lhs := type.appFn!.appArg!
-      if ← withReducible (isDefEq (← cgoal.getType) type) then
-        cgoal.assign (val2.beta hyps2) -- TODO: Do we need this, or is the defeq enough?
-        let cp ← instantiateMVars lhs1
-        let e1 ← instantiateMVars rhs1
-        let e2 ← instantiateMVars rewritten
-        -- ignore trivial critical pairs:
-        if ← withReducible (isDefEqGuarded e1 e2) then return
-        let msg :=
-          m!"The rules {← My.ppOrigin thm1.origin} and {← My.ppOrigin thm2.origin} produce a critical pair. Expression{indentExpr cp}\n" ++
-          m!"reduces to{indentExpr e1}\n" ++
-          m!"as well as{indentExpr e2}"
+          let goal ← mkEq e1 e2
+          mvarsToContext (hyps1 ++ hyps2) goal fun goal => do
+            check goal
+            -- TODO: Feed these through mvarsToContext, too, for prettier output
+            let cp ← instantiateMVars cp
+            let e1 ← instantiateMVars e1
+            let e2 ← instantiateMVars e2
 
-        -- logInfo msg
-        -- logInfo m!"Proof term:{indentExpr (← instantiateMVars (.mvar goal))}"
+            let msg :=
+              m!"The rules {← My.ppOrigin thm1.origin} and {← My.ppOrigin thm2.origin} produce a critical pair. Expression{indentExpr cp}\n" ++
+              m!"reduces to{indentExpr e1}\n" ++
+              m!"as well as{indentExpr e2}"
 
-        /-
-        let mut goal ← mkEq e1 e2
-        for m in (← getMVars goal) do
-          unless (← m.isAssigned) || hyps1.any (·.mvarId! == m) || hyps2.any (·.mvarId! == m) do
-            goal ← mkForallFVars #[mkMVar m] goal
-        for h in (hyps2 ++ hyps1).reverse do
-          if ! (← h.mvarId!.isAssigned) then
-            goal ← mkForallFVars #[h] goal
-        check goal
-        -/
-
-        let goal ← mkEq e1 e2
-        mvarsToContext (hyps1 ++ hyps2) goal fun goal => do
-          check goal
-
-          let .mvar simp_goal ← mkFreshExprSyntheticOpaqueMVar goal
-            | unreachable!
-          let (_, simp_goal) ← simp_goal.intros
-          check (mkMVar simp_goal)
-          let (remaining_goals, _) ← simp_goal.withContext do
-            runTactic simp_goal (← `(tactic|try simp [*]))
-          unless remaining_goals.isEmpty do
-            logInfo <| msg ++ m!"\njoining failed with\n{goalsToMessageData remaining_goals}"
+            let .mvar simp_goal ← mkFreshExprSyntheticOpaqueMVar goal
+              | unreachable!
+            let (_, simp_goal) ← simp_goal.intros
+            check (mkMVar simp_goal)
+            let (remaining_goals, _) ← simp_goal.withContext do
+              runTactic simp_goal (← `(tactic|(
+                try contradiction
+                try simp [*]
+              )))
+            unless remaining_goals.isEmpty do
+              logInfo <| msg ++ m!"\njoining failed with\n{goalsToMessageData remaining_goals}"
 
     if true then
       -- The following works, but sometimes `congr` complains
@@ -159,34 +149,47 @@ def checkSimpLC (thm1 thm2 : SimpTheorem) : MetaM Unit := withConfig (fun c => {
 
   go goal
 
+def mkSimpTheorems (name : Name) : MetaM SimpTheorems := do
+  let sthms : SimpTheorems := {}
+  sthms.addConst name
 
 def mkSimpTheorem (name : Name) : MetaM SimpTheorem := do
-  let sthms : SimpTheorems := {}
-  let sthms ← sthms.addConst name
+  let sthms ← mkSimpTheorems name
   let sthms := sthms.pre.values ++ sthms.post.values
   return sthms[0]!
 
-def checkSimpLCAll : MetaM Unit := do
-  let thms ← getSimpTheorems
-  let mut names := #[]
-  for (origin, ()) in thms.lemmaNames.set do
-    if let .decl n _ false := origin then
-      if (`List).isPrefixOf n then
-        names := names.push n
-  logInfo m!"Found {names.size} simp lemmas"
-  names := names[:40]
-  logInfo m!"Checking {names.size} simp lemmas for critical pairs"
-  -- logInfo m!"{names}"
-  for thm1 in names do
-    for thm2 in names do
-      checkSimpLC (← mkSimpTheorem thm1) (← mkSimpTheorem thm2)
+-- Exclude these from checking all
+def lcBlacklist : Array Name := #[
+  ``List.foldrM_append -- causes it to run out of stack space
+  ]
 
+def checkSimpLCAll : MetaM Unit := do
+  let sthms ← getSimpTheorems
+  let thms := sthms.pre.values ++ sthms.post.values
+  let thms := thms.filter fun sthm => Id.run do
+    if sthms.erased.contains sthm.origin then
+      return false
+    if let .decl n _ false := sthm.origin then
+      if n ∈ lcBlacklist then
+        return false
+      if (`List).isPrefixOf n then
+        return true
+    return false
+  logInfo m!"Found {thms.size} simp lemmas"
+  logInfo m!"Checking {thms.size} simp lemmas for critical pairs"
+  let filtered_sthms := thms.foldl Lean.Meta.addSimpTheoremEntry (init := {})
+  -- logInfo m!"{names}"
+  -- let thms := thms[:104] ++ thms[105:]
+  for thm1 in thms do
+    try
+      checkSimpLC thm1 filtered_sthms
+    catch e => logError m!"Failed to check {← My.ppOrigin thm1.origin}\n{← nestedExceptionToMessageData e}"
 
 open Elab Command in
 elab "check_simp_lc " thm1:ident thm2:ident : command => runTermElabM fun _ => do
   let thm1 ← resolveGlobalConstNoOverload thm1
   let thm2 ← resolveGlobalConstNoOverload thm2
-  checkSimpLC (← mkSimpTheorem thm1) (← mkSimpTheorem thm2)
+  checkSimpLC (← mkSimpTheorem thm1) (← mkSimpTheorems thm2)
 
 open Elab Command in
 elab "check_simp_lc" : command => runTermElabM fun _ => do
@@ -202,11 +205,14 @@ check_simp_lc List.takeWhile_append_dropWhile List.dropWhile_nil
 
 attribute [simp] List.foldrM
 -- fixes
-check_simp_lc List.foldlM_reverse List.reverse_cons
+-- check_simp_lc List.foldlM_reverse List.reverse_cons
 
 attribute [-simp] List.takeWhile_append_dropWhile
 -- fixes many lemmas
 
-set_option profiler true
+attribute [simp] or_assoc
+attribute [simp] and_assoc
+-- fixes
+-- check_simp_lc List.mem_append List.cons_append
 
--- check_simp_lc
+check_simp_lc
