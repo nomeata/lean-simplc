@@ -1,20 +1,20 @@
 import Lean
-import Std.Data.List.Lemmas
-import Std.Lean.Meta.Basic
-import Std.Lean.Delaborator
-import Std.Lean.HashSet
+-- import Std.Data.List.Lemmas
+-- import Std.Lean.Meta.Basic
+-- import Std.Lean.Delaborator
+-- import Std.Lean.HashSet
 
 open Lean Meta
 
--- using ppConst
+-- remove with https://github.com/leanprover/lean4/pull/4362
 def My.ppOrigin [Monad m] [MonadEnv m] [MonadError m] : Origin → m MessageData
   | .decl n post inv => do
     let r ← mkConstWithLevelParams n;
     match post, inv with
-    | true,  true  => return m!"← {ppConst r}"
-    | true,  false => return m!"{ppConst r}"
-    | false, true  => return m!"↓ ← {ppConst r}"
-    | false, false => return m!"↓ {ppConst r}"
+    | true,  true  => return m!"← {MessageData.ofConst r}"
+    | true,  false => return m!"{MessageData.ofConst r}"
+    | false, true  => return m!"↓ ← {MessageData.ofConst r}"
+    | false, false => return m!"↓ {MessageData.ofConst r}"
   | .fvar n => return mkFVar n
   | .stx _ ref => return ref
   | .other n => return n
@@ -195,7 +195,7 @@ def checkSimpLCAll (ignores : HashSet (Name × Name) := {}): MetaM Unit := do
 
 open Elab Command in
 elab "check_simp_lc " thms:ident+ : command => runTermElabM fun _ => do
-  let names ← thms.mapM resolveGlobalConstNoOverloadWithInfo
+  let names ← thms.mapM (realizeGlobalConstNoOverloadWithInfo ·)
   let sthms ← names.foldlM (fun sthms name => sthms.addConst name) {}
   checkSimpLC (← mkSimpTheorem names[0]!) sthms (verbose := true)
 
@@ -209,8 +209,8 @@ open Elab Command in
 elab "check_simp_lc " ign:ignores : command => runTermElabM fun _ => do
   let ignores ← match ign with
     | `(ignores|ignoring $[$i1:ident $i2:ident]*) => do
-      let thm1s ← i1.mapM resolveGlobalConstNoOverloadWithInfo
-      let thm2s ← i2.mapM resolveGlobalConstNoOverloadWithInfo
-      pure (HashSet.ofArray (thm1s.zip thm2s))
+      let thm1s ← i1.mapM (realizeGlobalConstNoOverloadWithInfo ·)
+      let thm2s ← i2.mapM (realizeGlobalConstNoOverloadWithInfo ·)
+      pure (HashSet.empty.insertMany (thm1s.zip thm2s))
     | _ => pure {}
   checkSimpLCAll ignores
