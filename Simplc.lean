@@ -80,6 +80,7 @@ def checkSimpLC (thm1 : SimpTheorem) (thms : SimpTheorems)
     let matchs := (← thms.pre.getUnify t simpDtConfig) ++ (← thms.post.getUnify t simpDtConfig)
     let matchs := matchs.filter fun thm2 => ! thms.erased.contains thm2.origin
     let matchs := matchs.filter fun thm2 => ! ignores.contains (thm1.origin.key, thm2.origin.key)
+    let matchs ← matchs.filterM fun thm2 => do return not (← isCriticalPairWhitelisted (thm1.origin.key, thm2.origin.key))
     -- logInfo m!"Matches: {matchs}"
     -- IO.println f!"matches: {matchs}"
     for thm2 in matchs do withoutModifingMVarAssignment do
@@ -96,10 +97,7 @@ def checkSimpLC (thm1 : SimpTheorem) (thms : SimpTheorems)
           let cp ← instantiateMVars lhs1
           let e1 ← instantiateMVars rhs1
           let e2 ← instantiateMVars rewritten
-          -- ignore trivial critical pairs:
-          if ← withReducible (isDefEqGuarded e1 e2) then return true
-          -- logInfo msg
-          -- logInfo m!"Proof term:{indentExpr (← instantiateMVars (.mvar goal))}"
+
 
           let goal ← mkEq e1 e2
           mvarsToContext (hyps1 ++ hyps2) #[cp, e1, e2, goal] fun _fvars r => do
@@ -107,6 +105,16 @@ def checkSimpLC (thm1 : SimpTheorem) (thms : SimpTheorems)
             -- Do we need forallInstTelescope here?
             -- forallInstTelescope (← mkForallFVars fvars goal) fvars.size fun goal => do
             id do
+              -- ignore trivial critical pairs:
+              if ← withReducible (isDefEqGuarded e1 e2) then
+                trace[simplc] "critical pair is trivial"
+                return true
+
+              trace[simplc]
+                m!"Expression{indentExpr cp}\n" ++
+                m!"reduces with {← My.ppOrigin thm1.origin} to{indentExpr e1}\n" ++
+                m!"and     with {← My.ppOrigin thm2.origin} to{indentExpr e2}\n"
+
               check goal
               let .mvar simp_goal ← mkFreshExprSyntheticOpaqueMVar goal
                 | unreachable!
@@ -121,12 +129,8 @@ def checkSimpLC (thm1 : SimpTheorem) (thms : SimpTheorems)
                 let cp ← instantiateMVars cp
                 let e1 ← instantiateMVars e1
                 let e2 ← instantiateMVars e2
-
-                trace[simplc]
-                  m!"Expression{indentExpr cp}\n" ++
-                  m!"reduces to{indentExpr e1}\n" ++
-                  m!"as well as{indentExpr e2}\n" ++
-                  m!"joining failed with\n{goalsToMessageData remaining_goals}"
+                trace[simplc] m!"Joining failed with\n{goalsToMessageData remaining_goals}"
+                logError m!"Non-confluent pair {← My.ppOrigin thm1.origin} {← My.ppOrigin thm2.origin}"
                 return false
               else
                 return true
@@ -211,7 +215,7 @@ def ignores : Parser := leading_parser
   optional ("ignoring " >> sepBy1IndentSemicolon (Parser.ident >> Parser.ident))
 
 
-open Elab Command in
+open Elab Command
 elab "check_simp_lc " ign:ignores : command => runTermElabM fun _ => do
   let ignores ← match ign with
     | `(ignores|ignoring $[$i1:ident $i2:ident]*) => do
@@ -220,3 +224,8 @@ elab "check_simp_lc " ign:ignores : command => runTermElabM fun _ => do
       pure (HashSet.empty.insertMany (thm1s.zip thm2s))
     | _ => pure {}
   checkSimpLCAll ignores
+
+elab "simp_lc_whitelist " thm1:ident thm2:ident : command => runTermElabM fun _ => do
+  let name1 ← realizeGlobalConstNoOverloadWithInfo thm1
+  let name2 ← realizeGlobalConstNoOverloadWithInfo thm2
+  whiteListCriticalPair (name1, name2)

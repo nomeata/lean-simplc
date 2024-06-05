@@ -16,11 +16,40 @@ attribute [simp] and_assoc
 -- Bug: tactic 'rfl' failed, equality expected
 -- check_simp_lc List.getElem?_eq_get? List.getElem?_eq_get?
 
-set_option trace.simplc true
-check_simp_lc  List.any_cons List.get_cons_drop
+-- Not a good lemma: Non-linear, and goes against the reduction direction
+attribute [-simp] List.get_cons_drop
 
-#exit
+-- Unclear which one is at fault here
+simp_lc_whitelist List.head?_reverse List.reverse_cons
+simp_lc_whitelist List.head?_reverse List.reverse_append
+
 set_option trace.simplc true
+
+-- This should be resolvable using List.mem_cons, but
+-- because of the dependency in `decide (x ∈ a :: as)`
+simp_lc_whitelist List.elem_eq_mem List.contains_cons
+
+-- We need the non-linear version of List.drop_left
+attribute [-simp] List.drop_left
+attribute [simp] List.drop_left'
+
+-- List.drop_drop adds the numbers in the wrong order
+attribute [-simp] List.drop_drop
+@[simp] theorem List.drop_drop' (n : Nat) : ∀ (m) (l : List α), drop n (drop m l) = drop (m + n) l := by
+  intros; rw [List.drop_drop, Nat.add_comm]
+
+-- Needed to join after List.drop_drop' List.drop_left'
+@[simp] theorem List.drop_left_add {l₁ l₂ : List α} {m n} (h : length l₁ = n) :
+  List.drop (n + m) (l₁ ++ l₂) = List.drop m l₂ := by
+  rw [← List.drop_drop', List.drop_left' h]
+
+attribute [simp] Nat.add_assoc
+-- Needed to join after List.drop_drop' List.drop_drop'
+check_simp_lc List.drop_drop' List.drop_left'
+
+-- Unclear, both are reasonable.
+simp_lc_whitelist List.get?_drop List.drop_succ_cons
+
 check_simp_lc ignoring
   List.get?_concat_length List.length_replicate
   List.get?_concat_length List.length_zipWith
