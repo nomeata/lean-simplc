@@ -1,12 +1,17 @@
 import Simplc
 
-attribute [simp] Function.comp_def
+set_option trace.simplc true
+
+-- attribute [simp] Function.comp_assoc
+@[simp]
+theorem Function.comp.assoc (f : φ → δ) (g : β → φ) (h : α → β) : (f ∘ g) ∘ h = f ∘ g ∘ h :=
+  rfl
 -- fixes
 -- check_simp_lc List.map_map List.map_map
 
 @[simp] theorem takeWhile_nil : List.takeWhile p [] = [] := rfl
 -- fixes
-check_simp_lc List.takeWhile_append_dropWhile List.dropWhile_nil
+-- check_simp_lc List.takeWhile_append_dropWhile List.dropWhile_nil
 
 attribute [simp] or_assoc
 attribute [simp] and_assoc
@@ -18,37 +23,54 @@ attribute [simp] and_assoc
 
 -- Not a good lemma: Non-linear, and goes against the reduction direction
 attribute [-simp] List.get_cons_drop
+-- check_simp_lc List.any_cons List.get_cons_drop
 
 -- Unclear which one is at fault here
 simp_lc_whitelist List.head?_reverse List.reverse_cons
 simp_lc_whitelist List.head?_reverse List.reverse_append
 
-set_option trace.simplc true
-
 -- This should be resolvable using List.mem_cons, but
 -- because of the dependency in `decide (x ∈ a :: as)`
 simp_lc_whitelist List.elem_eq_mem List.contains_cons
 
+
 -- We need the non-linear version of List.drop_left
 attribute [-simp] List.drop_left
 attribute [simp] List.drop_left'
+-- check_simp_lc List.drop_left List.length_replicate
+
 
 -- List.drop_drop adds the numbers in the wrong order
 attribute [-simp] List.drop_drop
 @[simp] theorem List.drop_drop' (n : Nat) : ∀ (m) (l : List α), drop n (drop m l) = drop (m + n) l := by
   intros; rw [List.drop_drop, Nat.add_comm]
 
+def Nat.add_assoc' : ∀ (n m k : Nat), n + (m + k) = (n + m  )+ k := by
+  intros; rw [Nat.add_assoc]
+
+-- One of these needed to join after List.drop_drop' List.drop_drop'
+-- attribute [simp] Nat.add_assoc
+attribute [simp] Nat.add_assoc'
+-- check_simp_lc List.drop_drop' List.drop_drop'
+
 -- Needed to join after List.drop_drop' List.drop_left'
 @[simp] theorem List.drop_left_add {l₁ l₂ : List α} {m n} (h : length l₁ = n) :
   List.drop (n + m) (l₁ ++ l₂) = List.drop m l₂ := by
   rw [← List.drop_drop', List.drop_left' h]
+-- check_simp_lc List.drop_drop' List.drop_left'
 
-attribute [simp] Nat.add_assoc
--- Needed to join after List.drop_drop' List.drop_drop'
-check_simp_lc List.drop_drop' List.drop_left'
+attribute [-simp] List.get?_drop
+@[simp]
+theorem List.get?_drop' (L : List α) (i j : Nat) : get? (L.drop i) j = get? L (j + i) := by
+  rw [List.get?_drop, Nat.add_comm]
+-- needed for the following, together with Nat.add_assoc'
+-- check_simp_lc List.get?_drop' List.drop_succ_cons
 
--- Unclear, both are reasonable.
-simp_lc_whitelist List.get?_drop List.drop_succ_cons
+-- Why does this not work:
+-- attribute [simp] List.append_ne_nil_of_ne_nil_left
+-- attribute [simp] List.append_ne_nil_of_ne_nil_right
+-- -- set_option trace.Meta.Tactic.simp true in
+-- check_simp_lc List.dropLast_append_of_ne_nil List.cons_append
 
 check_simp_lc ignoring
   List.get?_concat_length List.length_replicate
