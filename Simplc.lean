@@ -1,4 +1,5 @@
 import Lean
+import Simplc.Setup
 -- import Std.Data.List.Lemmas
 -- import Std.Lean.Meta.Basic
 -- import Std.Lean.Delaborator
@@ -38,23 +39,21 @@ def forallInstTelescope {α} (e : Expr) (n : Nat) (k : Expr → MetaM α) : Meta
     withLocalDecl name bi d fun x => do
       forallInstTelescope (b.instantiate1 x) n k
 
-def mvarsToContext {α} (es : Array Expr) (e : Expr) (k : Expr → MetaM α) : MetaM α := do
-  let e ← instantiateMVars e
-  let mut s := { mctx := (← getMCtx), lctx := (← getLCtx), ngen := (← getNGen), abstractLevels := false }
-  for e' in es do
-    (_, s) := AbstractMVars.abstractExprMVars e' s
-  let (e, s') := AbstractMVars.abstractExprMVars e s
-  s := s'
+def mvarsToContext {α} (es1 : Array Expr) (es2 : Array Expr) (k : Array Expr → Array Expr → MetaM α) : MetaM α := do
+  let es2 ← es2.mapM instantiateMVars
+  let s  : AbstractMVars.State := { mctx := (← getMCtx), lctx := (← getLCtx), ngen := (← getNGen), abstractLevels := false }
+  let (es2, s) := Id.run <| StateT.run (s := s) do
+    es1.forM fun e => do let _ ← AbstractMVars.abstractExprMVars e
+    es2.mapM fun e => AbstractMVars.abstractExprMVars e
   setNGen s.ngen
   setMCtx s.mctx
-  let e := s.lctx.mkForall s.fvars e
-  forallInstTelescope e s.fvars.size k
+  withLCtx s.lctx (← getLocalInstances) do
+    k s.fvars es2
 
 open Elab Tactic
 partial
 def checkSimpLC (thm1 : SimpTheorem) (thms : SimpTheorems)
     (ignores : HashSet (Name × Name) := {})
-    (verbose : Bool := false)
     : MetaM Unit := withConfig (fun c => { c with etaStruct := .none }) do
 
   -- IO.println f!"Checking {thm1} for critical pairs"
@@ -83,49 +82,56 @@ def checkSimpLC (thm1 : SimpTheorem) (thms : SimpTheorems)
     let matchs := matchs.filter fun thm2 => ! ignores.contains (thm1.origin.key, thm2.origin.key)
     -- logInfo m!"Matches: {matchs}"
     -- IO.println f!"matches: {matchs}"
-    -- TODO: Without the [:1] I am getting stack overflows here
     for thm2 in matchs do withoutModifingMVarAssignment do
-      let val2  ← thm2.getValue
-      let type2 ← inferType val2
-      let (hyps2, _bis, type2) ← forallMetaTelescopeReducing type2
-      let type ← whnf (← instantiateMVars type2)
-      -- let lhs := type.appFn!.appArg!
-      if ← withReducible (isDefEq (← cgoal.getType) type) then
-        cgoal.assign (val2.beta hyps2) -- TODO: Do we need this, or is the defeq enough?
-        let cp ← instantiateMVars lhs1
-        let e1 ← instantiateMVars rhs1
-        let e2 ← instantiateMVars rewritten
-        -- ignore trivial critical pairs:
-        if ← withReducible (isDefEqGuarded e1 e2) then return
-        -- logInfo msg
-        -- logInfo m!"Proof term:{indentExpr (← instantiateMVars (.mvar goal))}"
+      let _ ← withTraceNode `simplc (fun r => do
+        return m!"{exceptBoolEmoji r} {← My.ppOrigin thm1.origin} {← My.ppOrigin thm2.origin}"
+      ) do
+        let val2  ← thm2.getValue
+        let type2 ← inferType val2
+        let (hyps2, _bis, type2) ← forallMetaTelescopeReducing type2
+        let type ← whnf (← instantiateMVars type2)
+        -- let lhs := type.appFn!.appArg!
+        if ← withReducible (isDefEq (← cgoal.getType) type) then
+          cgoal.assign (val2.beta hyps2) -- TODO: Do we need this, or is the defeq enough?
+          let cp ← instantiateMVars lhs1
+          let e1 ← instantiateMVars rhs1
+          let e2 ← instantiateMVars rewritten
+          -- ignore trivial critical pairs:
+          if ← withReducible (isDefEqGuarded e1 e2) then return true
+          -- logInfo msg
+          -- logInfo m!"Proof term:{indentExpr (← instantiateMVars (.mvar goal))}"
 
-        let goal ← mkEq e1 e2
-        mvarsToContext (hyps1 ++ hyps2) goal fun goal => do
-          check goal
-          let .mvar simp_goal ← mkFreshExprSyntheticOpaqueMVar goal
-            | unreachable!
-          let (_, simp_goal) ← simp_goal.intros
-          check (mkMVar simp_goal)
-          let (remaining_goals, _) ← simp_goal.withContext do
-            runTactic simp_goal (← `(tactic|(
-              try contradiction
-              try simp [*]
-            )))
-          unless remaining_goals.isEmpty do
-            if verbose then
-              -- TODO: Feed these through mvarsToContext, too, for prettier output
-              let cp ← instantiateMVars cp
-              let e1 ← instantiateMVars e1
-              let e2 ← instantiateMVars e2
+          let goal ← mkEq e1 e2
+          mvarsToContext (hyps1 ++ hyps2) #[cp, e1, e2, goal] fun _fvars r => do
+            let #[cp, e1, e2, goal] := r | unreachable!
+            -- Do we need forallInstTelescope here?
+            -- forallInstTelescope (← mkForallFVars fvars goal) fvars.size fun goal => do
+            id do
+              check goal
+              let .mvar simp_goal ← mkFreshExprSyntheticOpaqueMVar goal
+                | unreachable!
+              let (_, simp_goal) ← simp_goal.intros
+              check (mkMVar simp_goal)
+              let (remaining_goals, _) ← simp_goal.withContext do
+                runTactic simp_goal (← `(tactic|(
+                  try contradiction
+                  try simp [*]
+                )))
+              if not remaining_goals.isEmpty then
+                let cp ← instantiateMVars cp
+                let e1 ← instantiateMVars e1
+                let e2 ← instantiateMVars e2
 
-              logInfo <|
-                m!"The rules\n    {← My.ppOrigin thm1.origin} {← My.ppOrigin thm2.origin}\nproduce a critical pair. Expression{indentExpr cp}\n" ++
-                m!"reduces to{indentExpr e1}\n" ++
-                m!"as well as{indentExpr e2}\n" ++
-                m!"joining failed with\n{goalsToMessageData remaining_goals}"
-            else
-              logInfo m!"  {← My.ppOrigin thm1.origin} {← My.ppOrigin thm2.origin}"
+                trace[simplc]
+                  m!"Expression{indentExpr cp}\n" ++
+                  m!"reduces to{indentExpr e1}\n" ++
+                  m!"as well as{indentExpr e2}\n" ++
+                  m!"joining failed with\n{goalsToMessageData remaining_goals}"
+                return false
+              else
+                return true
+          else
+            return true
 
     if true then
       -- The following works, but sometimes `congr` complains
@@ -190,14 +196,14 @@ def checkSimpLCAll (ignores : HashSet (Name × Name) := {}): MetaM Unit := do
   -- let thms := thms[:104] ++ thms[105:]
   for thm1 in thms do
     try
-      checkSimpLC thm1 filtered_sthms (ignores := ignores) (verbose := false)
+      checkSimpLC thm1 filtered_sthms (ignores := ignores)
     catch e => logError m!"Failed to check {← My.ppOrigin thm1.origin}\n{← nestedExceptionToMessageData e}"
 
 open Elab Command in
 elab "check_simp_lc " thms:ident+ : command => runTermElabM fun _ => do
   let names ← thms.mapM (realizeGlobalConstNoOverloadWithInfo ·)
   let sthms ← names.foldlM (fun sthms name => sthms.addConst name) {}
-  checkSimpLC (← mkSimpTheorem names[0]!) sthms (verbose := true)
+  checkSimpLC (← mkSimpTheorem names[0]!) sthms
 
 
 open Parser Term Tactic in

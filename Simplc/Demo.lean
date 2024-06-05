@@ -16,6 +16,11 @@ attribute [simp] and_assoc
 -- Bug: tactic 'rfl' failed, equality expected
 -- check_simp_lc List.getElem?_eq_get? List.getElem?_eq_get?
 
+set_option trace.simplc true
+check_simp_lc  List.any_cons List.get_cons_drop
+
+#exit
+set_option trace.simplc true
 check_simp_lc ignoring
   List.get?_concat_length List.length_replicate
   List.get?_concat_length List.length_zipWith
