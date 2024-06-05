@@ -68,7 +68,7 @@ def checkSimpLC (thm1 : SimpTheorem) (thms : SimpTheorems)
   let (rewritten, Expr.mvar goal) ← Conv.mkConvGoalFor lhs1 | unreachable!
   -- logInfo m!"Initial goal: {goal}"
 
-  let rec go (cgoal : MVarId) : MetaM Unit := do
+  let rec go (atRoot : Bool) (cgoal : MVarId) : MetaM Unit := do
     let (t, _) ← Lean.Elab.Tactic.Conv.getLhsRhsCore cgoal
     if t.isMVar then
       -- logInfo m!"Ignoring metavariable {t} (kind: {repr (← t.mvarId!.getKind)})"
@@ -81,6 +81,8 @@ def checkSimpLC (thm1 : SimpTheorem) (thms : SimpTheorems)
     let matchs := matchs.filter fun thm2 => ! thms.erased.contains thm2.origin
     let matchs := matchs.filter fun thm2 => ! ignores.contains (thm1.origin.key, thm2.origin.key)
     let matchs ← matchs.filterM fun thm2 => do return not (← isCriticalPairWhitelisted (thm1.origin.key, thm2.origin.key))
+    let matchs := if atRoot then
+      matchs.filter (fun thm2 => thm2.origin.key ≠ thm1.origin.key) else matchs
     -- logInfo m!"Matches: {matchs}"
     -- IO.println f!"matches: {matchs}"
     for thm2 in matchs do withoutModifingMVarAssignment do
@@ -90,9 +92,8 @@ def checkSimpLC (thm1 : SimpTheorem) (thms : SimpTheorems)
         let val2  ← thm2.getValue
         let type2 ← inferType val2
         let (hyps2, _bis, type2) ← forallMetaTelescopeReducing type2
-        let type ← whnf (← instantiateMVars type2)
-        -- let lhs := type.appFn!.appArg!
-        if ← withReducible (isDefEq (← cgoal.getType) type) then
+        let type2 ← whnf (← instantiateMVars type2)
+        if ← withReducible (isDefEq (← cgoal.getType) type2) then
           cgoal.assign (val2.beta hyps2) -- TODO: Do we need this, or is the defeq enough?
           let cp ← instantiateMVars lhs1
           let e1 ← instantiateMVars rhs1
@@ -103,37 +104,30 @@ def checkSimpLC (thm1 : SimpTheorem) (thms : SimpTheorems)
           mvarsToContext (hyps1 ++ hyps2) #[cp, e1, e2, goal] fun _fvars r => do
             let #[cp, e1, e2, goal] := r | unreachable!
             -- Do we need forallInstTelescope here?
+            -- At some point I was using
             -- forallInstTelescope (← mkForallFVars fvars goal) fvars.size fun goal => do
-            id do
-              -- ignore trivial critical pairs:
-              if ← withReducible (isDefEqGuarded e1 e2) then
-                trace[simplc] "critical pair is trivial"
-                return true
+            -- here
+            trace[simplc]
+              m!"Expression{indentExpr cp}\n" ++
+              m!"reduces with {← My.ppOrigin thm1.origin} to{indentExpr e1}\n" ++
+              m!"and     with {← My.ppOrigin thm2.origin} to{indentExpr e2}\n"
 
-              trace[simplc]
-                m!"Expression{indentExpr cp}\n" ++
-                m!"reduces with {← My.ppOrigin thm1.origin} to{indentExpr e1}\n" ++
-                m!"and     with {← My.ppOrigin thm2.origin} to{indentExpr e2}\n"
-
-              check goal
-              let .mvar simp_goal ← mkFreshExprSyntheticOpaqueMVar goal
-                | unreachable!
-              let (_, simp_goal) ← simp_goal.intros
-              check (mkMVar simp_goal)
-              let (remaining_goals, _) ← simp_goal.withContext do
-                runTactic simp_goal (← `(tactic|(
-                  try contradiction
-                  try simp [*]
-                )))
-              if not remaining_goals.isEmpty then
-                let cp ← instantiateMVars cp
-                let e1 ← instantiateMVars e1
-                let e2 ← instantiateMVars e2
-                trace[simplc] m!"Joining failed with\n{goalsToMessageData remaining_goals}"
-                logError m!"Non-confluent pair {← My.ppOrigin thm1.origin} {← My.ppOrigin thm2.origin}"
-                return false
-              else
-                return true
+            check goal
+            let .mvar simp_goal ← mkFreshExprSyntheticOpaqueMVar goal
+              | unreachable!
+            let (_, simp_goal) ← simp_goal.intros
+            check (mkMVar simp_goal)
+            let (remaining_goals, _) ← simp_goal.withContext do
+              runTactic simp_goal (← `(tactic|(
+                try contradiction
+                try simp [*]
+              )))
+            if not remaining_goals.isEmpty then
+              trace[simplc] m!"Joining failed with\n{goalsToMessageData remaining_goals}"
+              logError m!"Non-confluent pair {← My.ppOrigin thm1.origin} {← My.ppOrigin thm2.origin}"
+              return false
+            else
+              return true
           else
             return true
 
@@ -148,7 +142,7 @@ def checkSimpLC (thm1 : SimpTheorem) (thms : SimpTheorems)
           withoutModifingMVarAssignment $ do
             for hj : j in [:goals.length] do
               if i ≠ j then goals[j].refl
-            go goals[i]
+            go false goals[i]
     else
       -- This should be simpler, but does not work, (the
       -- isDefEqGuarded above fails) and I do not see why
@@ -158,15 +152,15 @@ def checkSimpLC (thm1 : SimpTheorem) (thms : SimpTheorems)
             let (rhs, subgoal) ← Conv.mkConvGoalFor x
             rhs.mvarId!.setKind .natural
             goal.assign (← mkCongrArg f subgoal)
-            go subgoal.mvarId!
+            go false subgoal.mvarId!
         -- else logInfo m!"Cannot descend into dependent {f} in {t}"
         withoutModifingMVarAssignment do
           let (rhs, subgoal) ← Conv.mkConvGoalFor f
           rhs.mvarId!.setKind .natural
           goal.assign (← mkCongrFun subgoal x)
-          go subgoal.mvarId!
+          go false subgoal.mvarId!
 
-  go goal
+  go true goal
 
 def mkSimpTheorems (name : Name) : MetaM SimpTheorems := do
   let sthms : SimpTheorems := {}
@@ -182,7 +176,7 @@ def lcBlacklist : Array Name := #[
   ``List.getElem?_eq_get?  -- oddness with .refl and Decidable
   ]
 
-def checkSimpLCAll (ignores : HashSet (Name × Name) := {}): MetaM Unit := do
+def checkSimpLCAll (pfix : Name) (ignores : HashSet (Name × Name) := {}): MetaM Unit := do
   let sthms ← getSimpTheorems
   let thms := sthms.pre.values ++ sthms.post.values
   let thms := thms.filter fun sthm => Id.run do
@@ -191,7 +185,7 @@ def checkSimpLCAll (ignores : HashSet (Name × Name) := {}): MetaM Unit := do
     if let .decl n _ false := sthm.origin then
       if n ∈ lcBlacklist then
         return false
-      if (`List).isPrefixOf n then
+      if pfix.isPrefixOf n then
         return true
     return false
   logInfo m!"Checking {thms.size} simp lemmas for critical pairs"
@@ -210,20 +204,27 @@ elab "check_simp_lc " thms:ident+ : command => runTermElabM fun _ => do
   checkSimpLC (← mkSimpTheorem names[0]!) sthms
 
 
-open Parser Term Tactic in
+section
+open Parser Term Tactic
 def ignores : Parser := leading_parser
   optional ("ignoring " >> sepBy1IndentSemicolon (Parser.ident >> Parser.ident))
 
+def in_opt : Parser := leading_parser
+  optional ("in " >> Parser.ident)
+end
 
 open Elab Command
-elab "check_simp_lc " ign:ignores : command => runTermElabM fun _ => do
+elab "check_simp_lc " pfix?:in_opt ign:ignores : command => runTermElabM fun _ => do
   let ignores ← match ign with
     | `(ignores|ignoring $[$i1:ident $i2:ident]*) => do
       let thm1s ← i1.mapM (realizeGlobalConstNoOverloadWithInfo ·)
       let thm2s ← i2.mapM (realizeGlobalConstNoOverloadWithInfo ·)
       pure (HashSet.empty.insertMany (thm1s.zip thm2s))
     | _ => pure {}
-  checkSimpLCAll ignores
+  let pfix := match pfix? with
+    | `(in_opt|in $i:ident) =>i.getId
+    | _ => .anonymous
+  checkSimpLCAll pfix ignores
 
 elab "simp_lc_whitelist " thm1:ident thm2:ident : command => runTermElabM fun _ => do
   let name1 ← realizeGlobalConstNoOverloadWithInfo thm1
