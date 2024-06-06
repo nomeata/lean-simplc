@@ -72,7 +72,9 @@ theorem List.get?_drop' (L : List α) (i j : Nat) : get? (L.drop i) j = get? L (
 -- -- set_option trace.Meta.Tactic.simp true in
 -- check_simp_lc List.dropLast_append_of_ne_nil List.cons_append
 
-check_simp_lc in List ignoring
+check_simp_lc in List
+#exit
+ ignoring
   List.get?_concat_length List.length_replicate
   List.get?_concat_length List.length_zipWith
   List.get?_concat_length List.length_concat
