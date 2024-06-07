@@ -51,6 +51,10 @@ simp_lc_whitelist bne_self_eq_false Bool.bne_assoc
 
 simp_lc_whitelist Bool.not_not_eq Bool.not_eq_not
 
+-- here simp_lc builds bad mvar assignments
+-- simp_lc_inspect Fin.is_lt Nat.lt_irrefl
+
+-- set_option simplc.stderr true in
 -- simp_lc_check root
 
 #exit

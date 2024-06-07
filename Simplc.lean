@@ -102,8 +102,8 @@ def checkSimpLC (root_only : Bool) (tac? : Option (TSyntax `Lean.Parser.Tactic.t
           let type2 ← whnf (← instantiateMVars type2)
           let type1 ← cgoal.getType
           if ← withReducible (isDefEq type1 type2) then
-            cgoal.assign (val2.beta hyps2) -- TODO: Do we need this, or is the defeq enough?
             MVarCycles.checkMVarsCycles
+            cgoal.assign (val2.beta hyps2) -- TODO: Do we need this, or is the defeq enough?
 
             mvarsToContext (hyps1 ++ hyps2) #[lhs1, rhs1, rewritten] fun _fvars r => do
               let #[cp, e1, e2] := r | unreachable!
