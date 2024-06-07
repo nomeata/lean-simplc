@@ -105,12 +105,6 @@ def checkSimpLC (root_only : Bool) (tac? : Option (TSyntax `Lean.Parser.Tactic.t
             cgoal.assign (val2.beta hyps2) -- TODO: Do we need this, or is the defeq enough?
             MVarCycles.checkMVarsCycles
 
-            (hyps1 ++ hyps2).forM fun hyp => do
-              match_expr (← hyp.mvarId!.getType) with
-              | Decidable p =>
-                hyp.mvarId!.assign (.app (.const ``Classical.propDecidable []) p)
-              | _ => pure ()
-
             mvarsToContext (hyps1 ++ hyps2) #[lhs1, rhs1, rewritten] fun _fvars r => do
               let #[cp, e1, e2] := r | unreachable!
               -- Do we need forallInstTelescope here?
