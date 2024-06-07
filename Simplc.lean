@@ -1,5 +1,6 @@
 import Lean
 import Simplc.Setup
+import Simplc.MVarCycles
 -- import Std.Data.List.Lemmas
 -- import Std.Lean.Meta.Basic
 -- import Std.Lean.Delaborator
@@ -66,9 +67,7 @@ partial
 def checkSimpLC (thm1 : SimpTheorem) (thms : SimpTheorems) (ignores : HashSet (Name × Name) := {}) :
     StateT (Array CriticalPair) MetaM Unit :=
   withConfig (fun c => { c with etaStruct := .none }) do
-
-  -- IO.println f!"Checking {thm1} for critical pairs"
-
+  withCurrHeartbeats do
   let val1 ← thm1.getValue
   let type1 ← inferType val1
   let (hyps1, _bis, eq1) ← forallMetaTelescopeReducing type1
@@ -93,14 +92,18 @@ def checkSimpLC (thm1 : SimpTheorem) (thms : SimpTheorems) (ignores : HashSet (N
       if (← isCriticalPairWhitelisted (thm1.origin.key, thm2.origin.key)) then continue
       if path.isEmpty then
         unless thm1.origin.key.quickLt thm2.origin.key do continue
-      let good ← withoutModifingMVarAssignment do
+      let good ← withoutModifingMVarAssignment do withCurrHeartbeats do
+        IO.eprintln s!"{thm1.origin.key} {thm2.origin.key}"
         withTraceNode `simplc (do return m!"{exceptBoolEmoji ·} {← critPair.pp}") do
           let val2  ← thm2.getValue
           let type2 ← inferType val2
           let (hyps2, _bis, type2) ← forallMetaTelescopeReducing type2
           let type2 ← whnf (← instantiateMVars type2)
-          if ← withReducible (isDefEq (← cgoal.getType) type2) then
+          let type1 ← cgoal.getType
+          if ← withReducible (isDefEq type1 type2) then
             cgoal.assign (val2.beta hyps2) -- TODO: Do we need this, or is the defeq enough?
+            MVarCycles.checkMVarsCycles
+
             mvarsToContext (hyps1 ++ hyps2) #[lhs1, rhs1, rewritten] fun _fvars r => do
               let #[cp, e1, e2] := r | unreachable!
               -- Do we need forallInstTelescope here?
@@ -121,7 +124,6 @@ def checkSimpLC (thm1 : SimpTheorem) (thms : SimpTheorems) (ignores : HashSet (N
               let (remaining_goals, _) ← simp_goal.withContext do
                 runTactic simp_goal (← `(tactic|(
                   try contradiction
-                  trace_state
                   try simp [*]
                 )))
               if remaining_goals.isEmpty then
@@ -129,6 +131,8 @@ def checkSimpLC (thm1 : SimpTheorem) (thms : SimpTheorems) (ignores : HashSet (N
               trace[simplc] m!"Joining failed with\n{goalsToMessageData remaining_goals}"
               return false
             else
+              trace[simplc] m!"Not a critical pair, discrTree false positive:" ++
+                m!"{indentExpr type1.consumeMData}\n=!={indentExpr type2}"
               return true
       unless good do
         modify (·.push critPair)
@@ -177,13 +181,37 @@ def lcBlacklist : Array Name := #[
   ``List.getElem?_eq_get?  -- oddness with .refl and Decidable
   ]
 
-def reportBadPairs (act : StateT (Array CriticalPair) MetaM Unit) : MetaM Unit := do
+section
+open Parser Term Tactic
+def ignores : Parser := leading_parser
+  optional ("ignoring " >> sepBy1IndentSemicolon (Parser.ident >> Parser.ident))
+
+def in_opt : Parser := leading_parser
+  optional ("in " >> Parser.ident)
+
+syntax "simp_lc_check " in_opt ignores : command
+syntax "simp_lc_check " Parser.ident Parser.ident : command
+syntax "simp_lc_whitelist " Parser.ident Parser.ident : command
+end
+
+def delabWhitelistCmd (cp : CriticalPair) : MetaM (TSyntax `command) := do
+  `(command|simp_lc_whitelist $(mkIdent cp.thm1.origin.key) $(mkIdent cp.thm2.origin.key))
+
+
+def reportBadPairs (cmdStx? : Option (TSyntax `command)) (act : StateT (Array CriticalPair) MetaM Unit) : MetaM Unit := do
   let (.unit, badPairs) ← StateT.run act #[]
   unless badPairs.isEmpty do
     logError <| m!"Found {badPairs.size} non-confluent critical pairs:" ++
       indentD (.joinSep ((← badPairs.mapM (·.pp)).toList) "\n")
+    if let .some cmdStx := cmdStx? then
+      let mut str : String := ""
+      for cp in badPairs do
+        let stx ← delabWhitelistCmd cp
+        str := str ++ "\n" ++ (← PrettyPrinter.ppCategory `command stx).pretty
+      str := str ++ "\n" ++ (← PrettyPrinter.ppCategory `command cmdStx).pretty
+      TryThis.addSuggestion cmdStx { suggestion := str }
 
-def checkSimpLCAll (pfix : Name) (ignores : HashSet (Name × Name) := {}): MetaM Unit := do
+def checkSimpLCAll (cmdStx : TSyntax `command) (pfix : Name) (ignores : HashSet (Name × Name) := {}): MetaM Unit := do
   let sthms ← getSimpTheorems
   let thms := sthms.pre.values ++ sthms.post.values
   let thms := thms.filter fun sthm => Id.run do
@@ -199,30 +227,22 @@ def checkSimpLCAll (pfix : Name) (ignores : HashSet (Name × Name) := {}): MetaM
   let filtered_sthms := thms.foldl Lean.Meta.addSimpTheoremEntry (init := {})
   -- logInfo m!"{names}"
   -- let thms := thms[:104] ++ thms[105:]
-  reportBadPairs do
+  reportBadPairs cmdStx do
     for thm1 in thms do
       try
         checkSimpLC thm1 filtered_sthms (ignores := ignores)
       catch e => logError m!"Failed to check {← My.ppOrigin thm1.origin}\n{← nestedExceptionToMessageData e}"
 
-open Elab Command in
-elab "check_simp_lc " thms:ident+ : command => runTermElabM fun _ => do
-  let names ← thms.mapM (realizeGlobalConstNoOverloadWithInfo ·)
-  let sthms ← names.foldlM (fun sthms name => sthms.addConst name) {}
-  reportBadPairs do
-    checkSimpLC (← mkSimpTheorem names[0]!) sthms
-
-section
-open Parser Term Tactic
-def ignores : Parser := leading_parser
-  optional ("ignoring " >> sepBy1IndentSemicolon (Parser.ident >> Parser.ident))
-
-def in_opt : Parser := leading_parser
-  optional ("in " >> Parser.ident)
-end
-
 open Elab Command
-elab "check_simp_lc " pfix?:in_opt ign:ignores : command => runTermElabM fun _ => do
+elab_rules : command
+  | `(command|simp_lc_check $ident1:ident $ident2:ident) => liftTermElabM fun _ => do
+  let name1 ← realizeGlobalConstNoOverloadWithInfo ident1
+  let name2 ← realizeGlobalConstNoOverloadWithInfo ident2
+  let sthms : SimpTheorems ← SimpTheorems.addConst {} name2
+  reportBadPairs .none do
+    checkSimpLC (← mkSimpTheorem name1) sthms
+  | `(command|simp_lc_check $pfix?:in_opt $ign:ignores) => liftTermElabM do
+  let stx ← getRef
   let ignores ← match ign with
     | `(ignores|ignoring $[$i1:ident $i2:ident]*) => do
       let thm1s ← i1.mapM (realizeGlobalConstNoOverloadWithInfo ·)
@@ -232,7 +252,7 @@ elab "check_simp_lc " pfix?:in_opt ign:ignores : command => runTermElabM fun _ =
   let pfix := match pfix? with
     | `(in_opt|in $i:ident) =>i.getId
     | _ => .anonymous
-  checkSimpLCAll pfix ignores
+  checkSimpLCAll ⟨stx⟩ pfix ignores
 
 elab "simp_lc_whitelist " thm1:ident thm2:ident : command => runTermElabM fun _ => do
   let name1 ← realizeGlobalConstNoOverloadWithInfo thm1

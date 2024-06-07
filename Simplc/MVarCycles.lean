@@ -9,13 +9,23 @@ inductive ToA where | T | A | D
 
 abbrev Path := Array (MVarId × ToA × Expr)
 
+-- I failed to prevent {Expr.mvar mvarId} from instantiating the mvar
+-- even with `withOptions (pp.instantiateMVars.set · false) do`
+def ppMVar (mvarId : MVarId) : MetaM MessageData := do
+  let mvarDecl ← mvarId.getDecl
+  let n :=
+    match mvarDecl.userName with
+    | .anonymous => mvarId.name.replacePrefix `_uniq `m
+    | n => n
+  return m!"?{mkIdent n}"
+
 def raiseCyclicMVarError (path : Path) : MetaM Unit := do
   let mut msg := m!"Found cycle in the mvar context:"
   for (mvarId, toa, e) in path do
     match toa with
-    | .T => msg := msg ++ m!"\n{Expr.mvar mvarId} :: {e}"
-    | .A => msg := msg ++ m!"\n{Expr.mvar mvarId} := {e}"
-    | .D => msg := msg ++ m!"\n{Expr.mvar mvarId} := {e} (delayed assignment)"
+    | .T => msg := msg ++ m!"\n{← ppMVar mvarId} :: {e}"
+    | .A => msg := msg ++ m!"\n{← ppMVar mvarId} := {e}"
+    | .D => msg := msg ++ m!"\n{← ppMVar mvarId} := {e} (delayed assignment)"
   throwError msg
 
 /-!
