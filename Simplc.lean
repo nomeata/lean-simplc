@@ -64,7 +64,7 @@ def CriticalPair.pp (cp : CriticalPair) : MetaM MessageData :=
 
 open Elab Tactic
 partial
-def checkSimpLC (thm1 : SimpTheorem) (thms : SimpTheorems) (ignores : HashSet (Name × Name) := {}) :
+def checkSimpLC (root_only : Bool) (tac? : Option (TSyntax `Lean.Parser.Tactic.tacticSeq)) (thm1 : SimpTheorem) (thms : SimpTheorems) :
     StateT (Array CriticalPair) MetaM Unit :=
   withConfig (fun c => { c with etaStruct := .none }) do
   withCurrHeartbeats do
@@ -88,12 +88,13 @@ def checkSimpLC (thm1 : SimpTheorem) (thms : SimpTheorems) (ignores : HashSet (N
     for thm2 in matchs do
       let critPair : CriticalPair := ⟨thm1, thm2, path⟩
       if thms.erased.contains thm2.origin then continue
-      if ignores.contains (thm1.origin.key, thm2.origin.key) then continue
+      if (← isIgnoredName thm2.origin.key) then continue
       if (← isCriticalPairWhitelisted (thm1.origin.key, thm2.origin.key)) then continue
       if path.isEmpty then
         unless thm1.origin.key.quickLt thm2.origin.key do continue
       let good ← withoutModifingMVarAssignment do withCurrHeartbeats do
-        IO.eprintln s!"{thm1.origin.key} {thm2.origin.key}"
+        if simplc.stderr.get (← getOptions) then
+          IO.eprintln s!"{thm1.origin.key} {thm2.origin.key}"
         withTraceNode `simplc (do return m!"{exceptBoolEmoji ·} {← critPair.pp}") do
           let val2  ← thm2.getValue
           let type2 ← inferType val2
@@ -103,6 +104,12 @@ def checkSimpLC (thm1 : SimpTheorem) (thms : SimpTheorems) (ignores : HashSet (N
           if ← withReducible (isDefEq type1 type2) then
             cgoal.assign (val2.beta hyps2) -- TODO: Do we need this, or is the defeq enough?
             MVarCycles.checkMVarsCycles
+
+            (hyps1 ++ hyps2).forM fun hyp => do
+              match_expr (← hyp.mvarId!.getType) with
+              | Decidable p =>
+                hyp.mvarId!.assign (.app (.const ``Classical.propDecidable []) p)
+              | _ => pure ()
 
             mvarsToContext (hyps1 ++ hyps2) #[lhs1, rhs1, rewritten] fun _fvars r => do
               let #[cp, e1, e2] := r | unreachable!
@@ -122,10 +129,16 @@ def checkSimpLC (thm1 : SimpTheorem) (thms : SimpTheorems) (ignores : HashSet (N
               let (_, simp_goal) ← simp_goal.intros
               check (mkMVar simp_goal)
               let (remaining_goals, _) ← simp_goal.withContext do
-                runTactic simp_goal (← `(tactic|(
-                  try contradiction
-                  try simp [*]
-                )))
+                match tac? with
+                | .some tac => runTactic simp_goal tac
+                | .none =>
+                  runTactic simp_goal (← `(tactic|(
+                    try contradiction
+                    try (apply Fin.elim0; assumption)
+                    try simp_all
+                    try ((try apply Iff.of_eq); ac_rfl)
+                    try omega -- helps with sizeOf lemmas and AC-equivalence of +
+                  )))
               if remaining_goals.isEmpty then
                 return true
               trace[simplc] m!"Joining failed with\n{goalsToMessageData remaining_goals}"
@@ -137,34 +150,45 @@ def checkSimpLC (thm1 : SimpTheorem) (thms : SimpTheorems) (ignores : HashSet (N
       unless good do
         modify (·.push critPair)
 
-    if true then
-      -- The following works, but sometimes `congr` complains
-      if t.isApp then do
-        let goals ←
-          try Lean.Elab.Tactic.Conv.congr cgoal
-          catch _ => pure []
-        let goals := goals.filterMap id
-        for hi : i in [:goals.length] do
-          withoutModifingMVarAssignment $ do
-            for hj : j in [:goals.length] do
-              if i ≠ j then goals[j].refl
-            go (path ++ [i+1]) goals[i]
-    else
-      -- This should be simpler, but does not work, (the
-      -- isDefEqGuarded above fails) and I do not see why
-      if let .app f x := t then
-        if (←inferType f).isArrow then
+    unless root_only do
+      if true then
+        -- The following works, but sometimes `congr` complains
+        if t.isApp then do
+          let goals ←
+            try Lean.Elab.Tactic.Conv.congr cgoal
+            catch e =>
+              trace[simplc] m!"congr failed on {cgoal}:\n{← nestedExceptionToMessageData e}"
+              pure []
+          let goals := goals.filterMap id
+          for hi : i in [:goals.length] do
+            if (← goals[i].getType).isEq then
+              withoutModifingMVarAssignment $ do
+                -- rfl all othe others, akin to `selectIdx`
+                for hj : j in [:goals.length] do
+                  if i ≠ j then
+                    if (← goals[j].getType).isEq then
+                      goals[j].refl
+                    else
+                      -- Likely a subsingleton instance, also see https://github.com/leanprover/lean4/issues/4394
+                      -- just leave in place, will become a parameter
+                      pure ()
+              go (path ++ [i+1]) goals[i]
+      else
+        -- This should be simpler, but does not work, (the
+        -- isDefEqGuarded above fails) and I do not see why
+        if let .app f x := t then
+          if (←inferType f).isArrow then
+            withoutModifingMVarAssignment do
+              let (rhs, subgoal) ← Conv.mkConvGoalFor x
+              rhs.mvarId!.setKind .natural
+              goal.assign (← mkCongrArg f subgoal)
+              go (path ++ [2]) subgoal.mvarId!
+          -- else logInfo m!"Cannot descend into dependent {f} in {t}"
           withoutModifingMVarAssignment do
-            let (rhs, subgoal) ← Conv.mkConvGoalFor x
+            let (rhs, subgoal) ← Conv.mkConvGoalFor f
             rhs.mvarId!.setKind .natural
-            goal.assign (← mkCongrArg f subgoal)
-            go (path ++ [2]) subgoal.mvarId!
-        -- else logInfo m!"Cannot descend into dependent {f} in {t}"
-        withoutModifingMVarAssignment do
-          let (rhs, subgoal) ← Conv.mkConvGoalFor f
-          rhs.mvarId!.setKind .natural
-          goal.assign (← mkCongrFun subgoal x)
-          go (path ++ [1]) subgoal.mvarId!
+            goal.assign (← mkCongrFun subgoal x)
+            go (path ++ [1]) subgoal.mvarId!
   go [] goal
 
 def mkSimpTheorems (name : Name) : MetaM SimpTheorems := do
@@ -176,22 +200,15 @@ def mkSimpTheorem (name : Name) : MetaM SimpTheorem := do
   let sthms := sthms.pre.values ++ sthms.post.values
   return sthms[0]!
 
--- Exclude these from checking all
-def lcBlacklist : Array Name := #[
-  ``List.getElem?_eq_get?  -- oddness with .refl and Decidable
-  ]
-
 section
 open Parser Term Tactic
-def ignores : Parser := leading_parser
-  optional ("ignoring " >> sepBy1IndentSemicolon (Parser.ident >> Parser.ident))
-
 def in_opt : Parser := leading_parser
   optional ("in " >> Parser.ident)
 
-syntax "simp_lc_check " in_opt ignores : command
-syntax "simp_lc_check " Parser.ident Parser.ident : command
+syntax "simp_lc_check " "root"? in_opt : command
+syntax "simp_lc_inspect " Parser.ident Parser.ident (byTactic)? : command
 syntax "simp_lc_whitelist " Parser.ident Parser.ident : command
+syntax "simp_lc_ignore " Parser.ident : command
 end
 
 def delabWhitelistCmd (cp : CriticalPair) : MetaM (TSyntax `command) := do
@@ -209,16 +226,16 @@ def reportBadPairs (cmdStx? : Option (TSyntax `command)) (act : StateT (Array Cr
         let stx ← delabWhitelistCmd cp
         str := str ++ "\n" ++ (← PrettyPrinter.ppCategory `command stx).pretty
       str := str ++ "\n" ++ (← PrettyPrinter.ppCategory `command cmdStx).pretty
-      TryThis.addSuggestion cmdStx { suggestion := str }
+      TryThis.addSuggestion cmdStx { suggestion := str, messageData? := m!"(lots of simp_lc_whitelist lines)" }
 
-def checkSimpLCAll (cmdStx : TSyntax `command) (pfix : Name) (ignores : HashSet (Name × Name) := {}): MetaM Unit := do
+def checkSimpLCAll (cmdStx : TSyntax `command) (root_only : Bool) (pfix : Name) : MetaM Unit := do
   let sthms ← getSimpTheorems
   let thms := sthms.pre.values ++ sthms.post.values
-  let thms := thms.filter fun sthm => Id.run do
+  let thms ← thms.filterM fun sthm => do
     if sthms.erased.contains sthm.origin then
       return false
     if let .decl n _ false := sthm.origin then
-      if n ∈ lcBlacklist then
+      if (← isIgnoredName n) then
         return false
       if pfix.isPrefixOf n then
         return true
@@ -230,31 +247,29 @@ def checkSimpLCAll (cmdStx : TSyntax `command) (pfix : Name) (ignores : HashSet 
   reportBadPairs cmdStx do
     for thm1 in thms do
       try
-        checkSimpLC thm1 filtered_sthms (ignores := ignores)
+        checkSimpLC root_only .none thm1 filtered_sthms
       catch e => logError m!"Failed to check {← My.ppOrigin thm1.origin}\n{← nestedExceptionToMessageData e}"
 
 open Elab Command
 elab_rules : command
-  | `(command|simp_lc_check $ident1:ident $ident2:ident) => liftTermElabM fun _ => do
+| `(command|simp_lc_inspect $ident1:ident $ident2:ident $[by $tac?]?) => liftTermElabM fun _ => do
   let name1 ← realizeGlobalConstNoOverloadWithInfo ident1
   let name2 ← realizeGlobalConstNoOverloadWithInfo ident2
   let sthms : SimpTheorems ← SimpTheorems.addConst {} name2
-  reportBadPairs .none do
-    checkSimpLC (← mkSimpTheorem name1) sthms
-  | `(command|simp_lc_check $pfix?:in_opt $ign:ignores) => liftTermElabM do
+  withOptions (·.setBool `trace.simplc true) do reportBadPairs .none do
+    checkSimpLC false tac? (← mkSimpTheorem name1) sthms
+
+| `(command|simp_lc_check $[root%$root?]? $pfix?:in_opt) => liftTermElabM do
   let stx ← getRef
-  let ignores ← match ign with
-    | `(ignores|ignoring $[$i1:ident $i2:ident]*) => do
-      let thm1s ← i1.mapM (realizeGlobalConstNoOverloadWithInfo ·)
-      let thm2s ← i2.mapM (realizeGlobalConstNoOverloadWithInfo ·)
-      pure (HashSet.empty.insertMany (thm1s.zip thm2s))
-    | _ => pure {}
   let pfix := match pfix? with
     | `(in_opt|in $i:ident) =>i.getId
     | _ => .anonymous
-  checkSimpLCAll ⟨stx⟩ pfix ignores
+  checkSimpLCAll ⟨stx⟩ root?.isSome pfix
 
 elab "simp_lc_whitelist " thm1:ident thm2:ident : command => runTermElabM fun _ => do
   let name1 ← realizeGlobalConstNoOverloadWithInfo thm1
   let name2 ← realizeGlobalConstNoOverloadWithInfo thm2
   whiteListCriticalPair (name1, name2)
+
+elab "simp_lc_ignore " thm:ident : command => runTermElabM fun _ => do
+  ignoreName (← realizeGlobalConstNoOverloadWithInfo thm)

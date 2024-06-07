@@ -1,6 +1,59 @@
 import Simplc
 
--- set_option trace.simplc true
+simp_lc_ignore eq_self
+simp_lc_ignore sizeOf_default
+
+-- (i : Nonempty b) ⊢ b
+simp_lc_whitelist imp_self forall_const
+
+-- Missing List.join_append
+simp_lc_whitelist List.append_bind List.bind_id
+
+@[simp] theorem Char.toNat_mk : Char.toNat ⟨v,n⟩ = v.toNat := rfl
+-- for simp_lc_inspect Char.mk.sizeOf_spec Char.sizeOf
+
+-- Better ite_not?
+-- Probably more an issue with how simp_lc puts [Decidable ¬p] into the context
+-- rather than only [Decidable p]
+@[simp]
+theorem ite_not' (p : Prop) {inst : Decidable ¬p} (x y : α) :
+  ite (¬p) x y = @ite _ p (by exact Classical.propDecidable p) y x :=
+  sorry
+simp_lc_ignore ite_not'
+-- for
+-- simp_lc_inspect dite_not dite_eq_ite
+
+-- missing theorem, variant of `addNat_subNat`
+@[simp] theorem addNat_subNat {i : Fin (n + 1)} (h : 1 ≤ (i : Nat)) : (Fin.subNat 1 i h).succ = i :=
+  sorry
+-- for
+-- simp_lc_inspect Fin.addNat_one Fin.addNat_subNat
+
+-- This is probably not so bad, because it is a highly conditional lemma
+-- but is it really useful to try this on every mem goal?
+simp_lc_ignore List.mem_of_find?_eq_some
+
+-- variant of add_one_le_iff
+@[simp] theorem add_one_eq_iff {n : Nat} : ∀ {k : Fin (n + 1)}, k + 1 = k ↔ k = Fin.last _ := by
+  sorry
+-- for
+-- simp_lc_inspect Fin.le_zero_iff Fin.add_one_le_iff
+
+@[simp] theorem bne_not_left (x y : Bool) : ((!x) != y) = !(x != y) := sorry
+@[simp] theorem bne_not_right (x y : Bool) : (x != (!y)) = !(x != y) := sorry
+-- for
+-- simp_lc_inspect Bool.bne_assoc Bool.bne_true
+
+simp_lc_whitelist Bool.bne_assoc bne_self_eq_false'
+simp_lc_whitelist Bool.bne_assoc Bool.bne_self_left
+simp_lc_whitelist Bool.bne_assoc Bool.bne_not_self
+simp_lc_whitelist bne_self_eq_false Bool.bne_assoc
+
+simp_lc_whitelist Bool.not_not_eq Bool.not_eq_not
+
+-- simp_lc_check root
+
+#exit
 
 -- attribute [simp] Function.comp_assoc
 @[simp]
@@ -71,279 +124,3 @@ theorem List.get?_drop' (L : List α) (i j : Nat) : get? (L.drop i) j = get? L (
 -- attribute [simp] List.append_ne_nil_of_ne_nil_right
 -- -- set_option trace.Meta.Tactic.simp true in
 -- simp_lc_check List.dropLast_append_of_ne_nil List.cons_append
-
-
-simp_lc_whitelist List.get?_map List.map_cons
-simp_lc_whitelist List.get?_map List.map_append
-simp_lc_whitelist List.get?_drop' List.drop_drop'
-simp_lc_whitelist List.get?_drop' List.drop_left'
-simp_lc_whitelist List.get?_drop' List.drop_left_add
-simp_lc_whitelist List.get?_drop' List.drop_append
-simp_lc_whitelist List.get?_drop' List.drop_length
-simp_lc_whitelist List.nth_take_of_succ List.take_cons_succ
-simp_lc_whitelist List.get?_concat_length List.append_assoc
-simp_lc_whitelist List.get?_concat_length List.length_replicate
-simp_lc_whitelist List.get?_concat_length List.length_zipWith
-simp_lc_whitelist List.get?_concat_length List.length_concat
-simp_lc_whitelist List.get?_concat_length List.length_map
-simp_lc_whitelist List.get?_concat_length List.length_set
-simp_lc_whitelist List.get?_concat_length List.length_dropLast
-simp_lc_whitelist List.get?_concat_length List.length_dropLast_cons
-simp_lc_whitelist List.get?_concat_length List.length_drop
-simp_lc_whitelist List.get?_concat_length List.length_reverse
-simp_lc_whitelist List.get?_concat_length List.length_take
-simp_lc_whitelist List.get?_concat_length List.length_append
-simp_lc_whitelist List.get?_concat_length List.length_zip
-simp_lc_whitelist List.get?_concat_length List.enumFrom_length
-simp_lc_whitelist List.get?_concat_length List.enum_length
-simp_lc_whitelist List.get_singleton List.get_cons_succ'
-simp_lc_whitelist List.getLast_append List.cons_append
-simp_lc_whitelist List.getLast_append List.singleton_append
-simp_lc_whitelist List.getLast_append List.append_assoc
-simp_lc_whitelist List.filterMap_join List.join_cons
-simp_lc_whitelist List.filterMap_map List.map_append
-simp_lc_whitelist List.filterMap_map List.map_id'
-simp_lc_whitelist List.filterMap_map List.map_id
-simp_lc_whitelist List.filterMap_some List.filterMap_join
-simp_lc_whitelist List.take_length List.length_replicate
-simp_lc_whitelist List.take_length List.length_zipWith
-simp_lc_whitelist List.take_length List.length_concat
-simp_lc_whitelist List.take_length List.length_map
-simp_lc_whitelist List.take_length List.length_set
-simp_lc_whitelist List.take_length List.length_dropLast
-simp_lc_whitelist List.take_length List.length_dropLast_cons
-simp_lc_whitelist List.take_length List.length_drop
-simp_lc_whitelist List.take_length List.length_reverse
-simp_lc_whitelist List.take_length List.length_take
-simp_lc_whitelist List.take_length List.length_append
-simp_lc_whitelist List.take_length List.length_zip
-simp_lc_whitelist List.take_length List.enumFrom_length
-simp_lc_whitelist List.take_length List.enum_length
-simp_lc_whitelist List.take_left List.length_replicate
-simp_lc_whitelist List.take_left List.length_zipWith
-simp_lc_whitelist List.take_left List.length_concat
-simp_lc_whitelist List.take_left List.length_map
-simp_lc_whitelist List.take_left List.length_set
-simp_lc_whitelist List.take_left List.length_dropLast
-simp_lc_whitelist List.take_left List.length_dropLast_cons
-simp_lc_whitelist List.take_left List.length_drop
-simp_lc_whitelist List.take_left List.length_reverse
-simp_lc_whitelist List.take_left List.length_take
-simp_lc_whitelist List.take_left List.length_append
-simp_lc_whitelist List.take_left List.length_zip
-simp_lc_whitelist List.take_left List.enumFrom_length
-simp_lc_whitelist List.take_left List.enum_length
-simp_lc_whitelist List.take_left List.takeWhile_append_dropWhile
-simp_lc_whitelist List.take_left List.take_append_drop
-simp_lc_whitelist List.take_left List.append_assoc
-simp_lc_whitelist List.foldrM_reverse List.reverse_cons
-simp_lc_whitelist List.foldrM_reverse List.reverse_append
-simp_lc_whitelist List.foldrM_append List.takeWhile_append_dropWhile
-simp_lc_whitelist List.foldrM_append List.take_append_drop
-simp_lc_whitelist List.mem_of_find?_eq_some List.mem_map
-simp_lc_whitelist List.mem_of_find?_eq_some List.mem_reverseAux
-simp_lc_whitelist List.mem_of_find?_eq_some List.mem_cons
-simp_lc_whitelist List.mem_of_find?_eq_some List.mem_singleton
-simp_lc_whitelist List.mem_of_find?_eq_some List.mem_reverse
-simp_lc_whitelist List.mem_of_find?_eq_some List.mem_filterMap
-simp_lc_whitelist List.mem_of_find?_eq_some List.mem_append
-simp_lc_whitelist List.mem_map List.map_map
-simp_lc_whitelist List.mem_map List.map_cons
-simp_lc_whitelist List.mem_map List.map_append
-simp_lc_whitelist List.mem_reverseAux List.reverseAux_cons
-simp_lc_whitelist List.mem_reverse List.reverse_cons
-simp_lc_whitelist List.mem_reverse List.reverse_append
-simp_lc_whitelist List.mem_filterMap List.filterMap_join
-simp_lc_whitelist List.mem_filterMap List.filterMap_map
-simp_lc_whitelist List.mem_filterMap List.filterMap_cons
-simp_lc_whitelist List.mem_append List.takeWhile_append_dropWhile
-simp_lc_whitelist List.mem_append List.take_append_drop
-simp_lc_whitelist List.mem_insert_iff List.mem_of_find?_eq_some
-simp_lc_whitelist List.mem_insert_iff List.insert_of_mem
-simp_lc_whitelist List.erase_cons_tail List.erase_cons_head
-simp_lc_whitelist List.dropLast_append_of_ne_nil List.cons_append
-simp_lc_whitelist List.dropLast_append_of_ne_nil List.singleton_append
-simp_lc_whitelist List.dropLast_append_of_ne_nil List.takeWhile_append_dropWhile
-simp_lc_whitelist List.dropLast_append_of_ne_nil List.take_append_drop
-simp_lc_whitelist List.dropLast_concat List.cons_append
-simp_lc_whitelist List.map_map List.map_id'
-simp_lc_whitelist List.map_map List.map_id
-simp_lc_whitelist List.map_append List.takeWhile_append_dropWhile
-simp_lc_whitelist List.map_append List.take_append_drop
-simp_lc_whitelist List.map_id' List.map_map
-simp_lc_whitelist List.map_id List.map_map
-simp_lc_whitelist List.foldr_reverse List.foldr_self_append
-simp_lc_whitelist List.foldr_append List.takeWhile_append_dropWhile
-simp_lc_whitelist List.foldr_append List.take_append_drop
-simp_lc_whitelist List.foldlM_reverse List.reverse_cons
-simp_lc_whitelist List.foldlM_reverse List.reverse_append
-simp_lc_whitelist List.foldlM_append List.takeWhile_append_dropWhile
-simp_lc_whitelist List.foldlM_append List.take_append_drop
-simp_lc_whitelist List.reverse_append List.takeWhile_append_dropWhile
-simp_lc_whitelist List.reverse_append List.take_append_drop
-simp_lc_whitelist List.getLastD_concat List.append_assoc
-simp_lc_whitelist List.take_append_drop List.drop_drop'
-simp_lc_whitelist List.take_append_drop List.drop_left'
-simp_lc_whitelist List.take_append_drop List.drop_left_add
-simp_lc_whitelist List.take_append_drop List.drop_append
-simp_lc_whitelist List.append_assoc List.takeWhile_append_dropWhile
-simp_lc_whitelist List.append_assoc List.take_append_drop
-simp_lc_whitelist List.length_zipWith List.zipWith_cons_cons
-simp_lc_whitelist List.length_dropLast List.dropLast_append_of_ne_nil
-simp_lc_whitelist List.length_drop List.drop_drop'
-simp_lc_whitelist List.length_drop List.drop_left'
-simp_lc_whitelist List.length_drop List.drop_left_add
-simp_lc_whitelist List.length_drop List.drop_append
-simp_lc_whitelist List.length_reverse List.reverse_append
-simp_lc_whitelist List.length_take List.take_cons_succ
-simp_lc_whitelist List.length_take List.take_left
-simp_lc_whitelist List.length_append List.cons_append
-simp_lc_whitelist List.length_append List.singleton_append
-simp_lc_whitelist List.length_append List.takeWhile_append_dropWhile
-simp_lc_whitelist List.length_append List.take_append_drop
-simp_lc_whitelist List.length_zip List.zip_cons_cons
-simp_lc_whitelist List.getLast?_reverse List.reverse_append
-simp_lc_whitelist List.getLast?_concat List.cons_append
-simp_lc_whitelist List.getLast?_concat List.singleton_append
-simp_lc_whitelist List.getLast?_concat List.append_assoc
-simp_lc_whitelist List.sizeOf_get List.get_replicate
-simp_lc_whitelist List.sizeOf_get List.get_map
-simp_lc_whitelist List.sizeOf_get List.get_set_eq
-simp_lc_whitelist List.sizeOf_get List.get_set_ne
-simp_lc_whitelist List.sizeOf_get List.get_dropLast
-simp_lc_whitelist List.sizeOf_get List.get_cons_zero
-simp_lc_whitelist List.sizeOf_get List.get_cons_succ'
-simp_lc_whitelist List.sizeOf_get List.get_cons_succ
-simp_lc_whitelist List.sizeOf_get List.get_cons_cons_one
-simp_lc_whitelist List.sizeOf_get List.get_singleton
-simp_lc_whitelist List.sizeOf_get List.cons.sizeOf_spec
-simp_lc_whitelist List.sizeOf_get List.nil.sizeOf_spec
-simp_lc_whitelist List.foldl_append List.takeWhile_append_dropWhile
-simp_lc_whitelist List.foldl_append List.take_append_drop
-simp_lc_whitelist List.drop_eq_nil_iff_le List.drop_drop'
-simp_lc_whitelist List.drop_eq_nil_iff_le List.drop_left'
-simp_lc_whitelist List.drop_eq_nil_iff_le List.drop_left_add
-simp_lc_whitelist List.drop_eq_nil_iff_le List.drop_append
-simp_lc_whitelist List.reverse_eq_nil_iff List.reverse_append
-simp_lc_whitelist List.take_eq_take List.take_cons_succ
-simp_lc_whitelist List.take_eq_take List.take_zero
-simp_lc_whitelist List.take_eq_take List.take_length
-simp_lc_whitelist List.take_eq_take List.take_left
-simp_lc_whitelist List.take_eq_take List.take_cons_succ
-simp_lc_whitelist List.take_eq_take List.take_zero
-simp_lc_whitelist List.take_eq_take List.take_length
-simp_lc_whitelist List.take_eq_take List.take_left
-simp_lc_whitelist List.take_eq_nil_iff List.take_left
-simp_lc_whitelist List.append_cancel_left_eq List.append_nil
-simp_lc_whitelist List.append_cancel_left_eq List.takeWhile_append_dropWhile
-simp_lc_whitelist List.append_cancel_left_eq List.take_append_drop
-simp_lc_whitelist List.append_cancel_left_eq List.append_nil
-simp_lc_whitelist List.append_cancel_left_eq List.takeWhile_append_dropWhile
-simp_lc_whitelist List.append_cancel_left_eq List.take_append_drop
-simp_lc_whitelist List.append_cancel_right_eq List.cons_append
-simp_lc_whitelist List.append_cancel_right_eq List.singleton_append
-simp_lc_whitelist List.append_cancel_right_eq List.takeWhile_append_dropWhile
-simp_lc_whitelist List.append_cancel_right_eq List.take_append_drop
-simp_lc_whitelist List.append_cancel_right_eq List.append_assoc
-simp_lc_whitelist List.append_cancel_right_eq List.nil_append
-simp_lc_whitelist List.append_cancel_right_eq List.cons_append
-simp_lc_whitelist List.append_cancel_right_eq List.singleton_append
-simp_lc_whitelist List.append_cancel_right_eq List.takeWhile_append_dropWhile
-simp_lc_whitelist List.append_cancel_right_eq List.take_append_drop
-simp_lc_whitelist List.append_cancel_right_eq List.append_assoc
-simp_lc_whitelist List.append_cancel_right_eq List.nil_append
-simp_lc_whitelist List.append_eq_nil List.takeWhile_append_dropWhile
-simp_lc_whitelist List.append_eq_nil List.take_append_drop
-simp_lc_whitelist List.nil_eq_append List.append_nil
-simp_lc_whitelist List.nil_eq_append List.takeWhile_append_dropWhile
-simp_lc_whitelist List.nil_eq_append List.take_append_drop
-simp_lc_whitelist List.nil_eq_append List.nil_append
-simp_lc_whitelist List.length_eq_zero List.length_replicate
-simp_lc_whitelist List.length_eq_zero List.length_zipWith
-simp_lc_whitelist List.length_eq_zero List.length_dropLast
-simp_lc_whitelist List.length_eq_zero List.length_dropLast_cons
-simp_lc_whitelist List.length_eq_zero List.length_drop
-simp_lc_whitelist List.length_eq_zero List.length_take
-simp_lc_whitelist List.length_eq_zero List.length_append
-simp_lc_whitelist List.length_eq_zero List.length_zip
-simp_lc_whitelist List.length_eq_zero List.enumFrom_length
-simp_lc_whitelist List.length_eq_zero List.enum_length
-simp_lc_whitelist List.get?_eq_none List.get?_drop'
-simp_lc_whitelist List.get?_eq_none List.nth_take_of_succ
-simp_lc_whitelist List.drop_drop' List.drop_length
-simp_lc_whitelist List.drop_drop' List.drop_succ_cons
-simp_lc_whitelist List.drop_drop' List.drop_left_add
-simp_lc_whitelist List.drop_drop' List.drop_append
-simp_lc_whitelist List.drop_drop' List.drop_length
-simp_lc_whitelist List.drop_left' List.drop_length
-simp_lc_whitelist List.drop_left' List.append_nil
-simp_lc_whitelist List.drop_left' List.cons_append
-simp_lc_whitelist List.drop_left' List.singleton_append
-simp_lc_whitelist List.drop_left' List.takeWhile_append_dropWhile
-simp_lc_whitelist List.drop_left' List.take_append_drop
-simp_lc_whitelist List.drop_left' List.append_assoc
-simp_lc_whitelist List.drop_left' List.nil_append
-simp_lc_whitelist List.drop_zero List.drop_left'
-simp_lc_whitelist List.drop_left_add List.drop_left'
-simp_lc_whitelist List.drop_left_add List.append_nil
-simp_lc_whitelist List.drop_left_add List.cons_append
-simp_lc_whitelist List.drop_left_add List.singleton_append
-simp_lc_whitelist List.drop_left_add List.takeWhile_append_dropWhile
-simp_lc_whitelist List.drop_left_add List.take_append_drop
-simp_lc_whitelist List.drop_left_add List.append_assoc
-simp_lc_whitelist List.drop_left_add List.nil_append
-simp_lc_whitelist List.drop_append List.drop_left'
-simp_lc_whitelist List.drop_append List.length_concat
-simp_lc_whitelist List.drop_append List.length_cons
-simp_lc_whitelist List.drop_append List.length_singleton
-simp_lc_whitelist List.drop_append List.length_append
-simp_lc_whitelist List.drop_append List.length_insert_of_not_mem
-simp_lc_whitelist List.drop_append List.append_nil
-simp_lc_whitelist List.drop_append List.cons_append
-simp_lc_whitelist List.drop_append List.singleton_append
-simp_lc_whitelist List.drop_append List.takeWhile_append_dropWhile
-simp_lc_whitelist List.drop_append List.take_append_drop
-simp_lc_whitelist List.drop_append List.append_assoc
-simp_lc_whitelist List.drop_length List.length_replicate
-simp_lc_whitelist List.drop_length List.length_zipWith
-simp_lc_whitelist List.drop_length List.length_map
-simp_lc_whitelist List.drop_length List.length_set
-simp_lc_whitelist List.drop_length List.length_dropLast
-simp_lc_whitelist List.drop_length List.length_dropLast_cons
-simp_lc_whitelist List.drop_length List.length_drop
-simp_lc_whitelist List.drop_length List.length_reverse
-simp_lc_whitelist List.drop_length List.length_take
-simp_lc_whitelist List.drop_length List.length_zip
-simp_lc_whitelist List.drop_length List.enumFrom_length
-simp_lc_whitelist List.drop_length List.enum_length
-simp_lc_whitelist List.filter_filter List.filter_cons_of_pos
-simp_lc_whitelist List.filter_append List.cons_append
-simp_lc_whitelist List.filter_append List.singleton_append
-simp_lc_whitelist List.filter_append List.takeWhile_append_dropWhile
-simp_lc_whitelist List.filter_append List.take_append_drop
-simp_lc_whitelist List.append_bind List.bind_id
-simp_lc_whitelist List.append_bind List.takeWhile_append_dropWhile
-simp_lc_whitelist List.append_bind List.take_append_drop
-simp_lc_whitelist List.mapM_append List.takeWhile_append_dropWhile
-simp_lc_whitelist List.mapM_append List.take_append_drop
-simp_lc_whitelist List.zipWith_map List.map_map
-simp_lc_whitelist List.zipWith_map List.map_cons
-simp_lc_whitelist List.zipWith_map List.map_append
-simp_lc_whitelist List.zipWith_map List.map_id'
-simp_lc_whitelist List.zipWith_map List.map_id
-simp_lc_whitelist List.zipWith_map List.map_map
-simp_lc_whitelist List.zipWith_map List.map_cons
-simp_lc_whitelist List.zipWith_map List.map_append
-simp_lc_whitelist List.zipWith_map List.map_id'
-simp_lc_whitelist List.zipWith_map List.map_id
-
-simp_lc_whitelist List.get_set_eq Fin.eta
-set_option maxHeartbeats 2000
-
-set_option pp.explicit true
-#check sizeOf_default
-#check Lean.MetavarKind.natural.sizeOf_spec
--- set_option trace.simplc true
--- simp_lc_check sizeOf_default Lean.MetavarKind.natural.sizeOf_spec
-
-simp_lc_check
