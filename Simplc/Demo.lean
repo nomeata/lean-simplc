@@ -7,10 +7,11 @@ simp_lc_ignore sizeOf_default
 simp_lc_whitelist imp_self forall_const
 
 -- Missing List.join_append
-simp_lc_whitelist List.append_bind List.bind_id
+simp_lc_inspect List.append_bind List.bind_id
 
 @[simp] theorem Char.toNat_mk : Char.toNat ⟨v,n⟩ = v.toNat := rfl
--- for simp_lc_inspect Char.mk.sizeOf_spec Char.sizeOf
+-- needed for (without ac_rfl)
+-- simp_lc_inspect Char.mk.sizeOf_spec Char.sizeOf by simp_all; ac_rfl
 
 -- Better ite_not?
 -- Probably more an issue with how simp_lc puts [Decidable ¬p] into the context
@@ -41,6 +42,9 @@ simp_lc_ignore List.mem_of_find?_eq_some
 
 @[simp] theorem bne_not_left (x y : Bool) : ((!x) != y) = !(x != y) := sorry
 @[simp] theorem bne_not_right (x y : Bool) : (x != (!y)) = !(x != y) := sorry
+-- or
+-- @[simp] theorem not_bne (x y : Bool) : (!(x != y)) = ((!x) != y) := sorry
+-- @[simp] theorem bne_not_right (x y : Bool) : (x != (!y)) = ((!x) != y) := sorry
 -- for
 -- simp_lc_inspect Bool.bne_assoc Bool.bne_true
 
@@ -53,9 +57,11 @@ simp_lc_whitelist Bool.not_not_eq Bool.not_eq_not
 
 -- here simp_lc builds bad mvar assignments
 -- simp_lc_inspect Fin.is_lt Nat.lt_irrefl
+simp_lc_ignore Fin.is_lt
 
 -- set_option simplc.stderr true in
 -- simp_lc_check root
+
 
 #exit
 
