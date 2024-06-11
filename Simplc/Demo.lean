@@ -59,8 +59,10 @@ simp_lc_whitelist Bool.not_not_eq Bool.not_eq_not
 -- simp_lc_inspect Fin.is_lt Nat.lt_irrefl
 simp_lc_ignore Fin.is_lt
 
+-- simp_lc_inspect BitVec.truncate_eq BitVec.truncate_append
+
 -- set_option simplc.stderr true in
--- simp_lc_check root
+simp_lc_check root
 
 
 #exit
