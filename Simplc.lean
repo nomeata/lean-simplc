@@ -1,12 +1,73 @@
 import Lean
 import Simplc.Setup
 import Simplc.MVarCycles
--- import Std.Data.List.Lemmas
--- import Std.Lean.Meta.Basic
--- import Std.Lean.Delaborator
--- import Std.Lean.HashSet
+
+/-!
+See the documentation for the `simp_lc` command.
+-/
 
 open Lean Meta
+
+/--
+The `simp_lc` command checks the simpset for critical pairs that cannot be joined by simp, has tools
+to investigate a critical pair and can ignore specific pairs or whole functions. See
+
+* `simp_lc check`: Investigates the full simp set.
+* `simp_lc inspect`: Investigates one pair
+* `simp_lc whitelist`: Whitelists a critical pair
+* `simp_lc ignore`: Ignores one lemma
+-/
+syntax "simp_lc" : command
+
+/--
+The `simp_lc check` command looks at all pairs of lemmas in the simp set and tries to construct a
+critical pair, i.e. an expression `e₀` that can be rewritten by either lemma to `e₁` resp. `e₂`.
+It then tries to solve `e₁ = e₂`, and reports those pairs that cannot be joined.
+
+The tactic used to join them is
+```
+try contradiction
+try (apply Fin.elim0; assumption)
+try simp_all
+try ((try apply Iff.of_eq); ac_rfl)
+try omega -- helps with sizeOf lemmas and AC-equivalence of +
+```
+
+The command fails if there are any join-joinable critical pairs. It will offer a “Try
+this”-suggestion to insert `simp_lc whitelist` commands for all of them.
+
+With `simp_lc check root` only critical paris where both lemmas rewrite at the same position are
+considered.
+
+With `simp_lc check in Foo` only lemmas whose name has `Foo.` as a prefix are considered.
+
+The option `trace.simplc` enables more verbose tracing.
+
+The option `simplc.stderr` causes pairs to be printed on `stderr`; this can be useful to debug cases
+where the command crashes lean or runs forever.
+-/
+syntax "simp_lc " &"check " "root"? ("in " ident)? : command
+
+/--
+The `simp_lc inspect thm1 thm2` command looks at critical pairs fromed by `thm1`  and `thm2`, and
+always causes verbose debug output.
+
+With `simp_lc inspect thm1 thm2 by …` one can interactively try to equate the critical pair.
+-/
+syntax "simp_lc " &"inspect " ident ident (Parser.Term.byTactic)? : command
+
+/--
+The `simp_lc whitelist thm1 thm2` causes the `simp_lc` commands to ignore all critical pairs formed
+by these two lemmas.
+-/
+syntax "simp_lc " &"whitelist " ident ident : command
+
+/--
+The `simp_lc ignore thm` command causes the `simp_lc` commands to ignore all critical pairs
+involving `thm`. This is different from removing `thm` from the simp set as it can still be used to
+join critical pairs.
+-/
+syntax "simp_lc " &"ignore " ident : command
 
 -- remove with https://github.com/leanprover/lean4/pull/4362
 def My.ppOrigin [Monad m] [MonadEnv m] [MonadError m] : Origin → m MessageData
@@ -194,20 +255,8 @@ def mkSimpTheorem (name : Name) : MetaM SimpTheorem := do
   let sthms := sthms.pre.values ++ sthms.post.values
   return sthms[0]!
 
-section
-open Parser Term Tactic
-def in_opt : Parser := leading_parser
-  optional ("in " >> Parser.ident)
-
-syntax "simp_lc_check " "root"? in_opt : command
-syntax "simp_lc_inspect " Parser.ident Parser.ident (byTactic)? : command
-syntax "simp_lc_whitelist " Parser.ident Parser.ident : command
-syntax "simp_lc_ignore " Parser.ident : command
-end
-
 def delabWhitelistCmd (cp : CriticalPair) : MetaM (TSyntax `command) := do
-  `(command|simp_lc_whitelist $(mkIdent cp.thm1.origin.key) $(mkIdent cp.thm2.origin.key))
-
+  `(command|simp_lc whitelist $(mkIdent cp.thm1.origin.key) $(mkIdent cp.thm2.origin.key))
 
 def reportBadPairs (cmdStx? : Option (TSyntax `command)) (act : StateT (Array CriticalPair) MetaM Unit) : MetaM Unit := do
   let (.unit, badPairs) ← StateT.run act #[]
@@ -246,24 +295,27 @@ def checkSimpLCAll (cmdStx : TSyntax `command) (root_only : Bool) (pfix : Name) 
 
 open Elab Command
 elab_rules : command
-| `(command|simp_lc_inspect $ident1:ident $ident2:ident $[by $tac?]?) => liftTermElabM fun _ => do
+| `(command|simp_lc inspect $ident1:ident $ident2:ident $[by $tac?]?) => liftTermElabM fun _ => do
   let name1 ← realizeGlobalConstNoOverloadWithInfo ident1
   let name2 ← realizeGlobalConstNoOverloadWithInfo ident2
   let sthms : SimpTheorems ← SimpTheorems.addConst {} name2
   withOptions (·.setBool `trace.simplc true) do reportBadPairs .none do
     checkSimpLC false tac? (← mkSimpTheorem name1) sthms
 
-| `(command|simp_lc_check $[root%$root?]? $pfix?:in_opt) => liftTermElabM do
+| `(command|simp_lc check $[root%$root?]? $[in $pfix?]?) => liftTermElabM do
   let stx ← getRef
   let pfix := match pfix? with
-    | `(in_opt|in $i:ident) =>i.getId
-    | _ => .anonymous
+    | .some i => i.getId
+    | .none => .anonymous
   checkSimpLCAll ⟨stx⟩ root?.isSome pfix
 
-elab "simp_lc_whitelist " thm1:ident thm2:ident : command => runTermElabM fun _ => do
+| `(command|simp_lc whitelist $thm1 $thm2) => liftTermElabM do
   let name1 ← realizeGlobalConstNoOverloadWithInfo thm1
   let name2 ← realizeGlobalConstNoOverloadWithInfo thm2
   whiteListCriticalPair (name1, name2)
 
-elab "simp_lc_ignore " thm:ident : command => runTermElabM fun _ => do
+| `(command|simp_lc ignore $thm) => liftTermElabM do
   ignoreName (← realizeGlobalConstNoOverloadWithInfo thm)
+
+| `(command|simp_lc) => liftTermElabM do
+  logWarning m!"Please use one of the `simp_lc` subcommands."
