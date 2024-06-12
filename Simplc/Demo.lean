@@ -55,10 +55,6 @@ simp_lc whitelist bne_self_eq_false Bool.bne_assoc
 
 simp_lc whitelist Bool.not_not_eq Bool.not_eq_not
 
--- here simp_lc builds bad mvar assignments
--- simp_lc inspect Fin.is_lt Nat.lt_irrefl
-simp_lc ignore Fin.is_lt
-
 -- simp_lc inspect BitVec.truncate_eq BitVec.truncate_append
 
 -- set_option simplc.stderr true in
