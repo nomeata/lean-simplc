@@ -293,6 +293,18 @@ def checkSimpLCAll (cmdStx : TSyntax `command) (root_only : Bool) (pfix : Name) 
         checkSimpLC root_only .none thm1 filtered_sthms
       catch e => logError m!"Failed to check {← My.ppOrigin thm1.origin}\n{← nestedExceptionToMessageData e}"
 
+def warnIfNotSimp (n : Name) : CoreM Unit := do
+  try
+    _ ← (← getSimpTheorems).erase (.decl n)
+  catch e =>
+    logWarning e.toMessageData
+
+def whiteListCriticalPair (pair : NamePair) : CoreM Unit := do
+  warnIfNotSimp pair.1
+  warnIfNotSimp pair.2
+  let pair := match pair with | (x,y) => if y.quickLt x then (y,x) else (x,y)
+  modifyEnv (simpLCWhitelistExt.addEntry · pair)
+
 open Elab Command
 elab_rules : command
 | `(command|simp_lc inspect $ident1:ident $ident2:ident $[by $tac?]?) => liftTermElabM fun _ => do
