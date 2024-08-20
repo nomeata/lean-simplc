@@ -28,7 +28,7 @@ The tactic used to join them is
 ```
 try contradiction
 try (apply Fin.elim0; assumption)
-try simp_all
+try repeat simp_all
 try ((try apply Iff.of_eq); ac_rfl)
 try omega -- helps with sizeOf lemmas and AC-equivalence of +
 ```
@@ -190,7 +190,7 @@ def checkSimpLC (root_only : Bool) (tac? : Option (TSyntax `Lean.Parser.Tactic.t
                   runTactic simp_goal (← `(tactic|(
                     try contradiction
                     try (apply Fin.elim0; assumption)
-                    try simp_all
+                    try repeat simp_all
                     try ((try apply Iff.of_eq); ac_rfl)
                     try omega -- helps with sizeOf lemmas and AC-equivalence of +
                   )))
