@@ -255,8 +255,8 @@ def mkSimpTheorem (name : Name) : MetaM SimpTheorem := do
   let sthms := sthms.pre.values ++ sthms.post.values
   return sthms[0]!
 
-def delabWhitelistCmd (cp : CriticalPair) : MetaM (TSyntax `command) := do
-  `(command|simp_lc whitelist $(mkIdent cp.thm1.origin.key) $(mkIdent cp.thm2.origin.key))
+def delabInspectCmd (cp : CriticalPair) : MetaM (TSyntax `command) := do
+  `(command|simp_lc inspect $(mkIdent cp.thm1.origin.key) $(mkIdent cp.thm2.origin.key))
 
 def reportBadPairs (cmdStx? : Option (TSyntax `command)) (act : StateT (Array CriticalPair) MetaM Unit) : MetaM Unit := do
   let (.unit, badPairs) ← StateT.run act #[]
@@ -266,10 +266,10 @@ def reportBadPairs (cmdStx? : Option (TSyntax `command)) (act : StateT (Array Cr
     if let .some cmdStx := cmdStx? then
       let mut str : String := ""
       for cp in badPairs do
-        let stx ← delabWhitelistCmd cp
+        let stx ← delabInspectCmd cp
         str := str ++ "\n" ++ (← PrettyPrinter.ppCategory `command stx).pretty
       str := str ++ "\n" ++ (← PrettyPrinter.ppCategory `command cmdStx).pretty
-      TryThis.addSuggestion cmdStx { suggestion := str, messageData? := m!"(lots of simp_lc_whitelist lines)" }
+      TryThis.addSuggestion cmdStx { suggestion := str, messageData? := m!"(lots of simp_lc_inspect lines)" }
 
 def checkSimpLCAll (cmdStx : TSyntax `command) (root_only : Bool) (pfix : Name) : MetaM Unit := do
   let sthms ← getSimpTheorems
