@@ -34,3 +34,8 @@ register_option simplc.stderr : Bool := {
   defValue := false
   descr := "Print steps to stderr (useful when it crashes)"
 }
+
+register_option simplc.checkWhitelist : Bool := {
+  defValue := true
+  descr := "simplc whitelist to warn if the pair is actually ok"
+}

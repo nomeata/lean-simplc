@@ -299,10 +299,17 @@ def warnIfNotSimp (n : Name) : CoreM Unit := do
   catch e =>
     logWarning e.toMessageData
 
-def whiteListCriticalPair (pair : NamePair) : CoreM Unit := do
-  warnIfNotSimp pair.1
-  warnIfNotSimp pair.2
-  let pair := match pair with | (x,y) => if y.quickLt x then (y,x) else (x,y)
+def whiteListCriticalPair (cmdStx : Syntax) : NamePair → MetaM Unit := fun ⟨name1, name2⟩ => do
+  warnIfNotSimp name1
+  warnIfNotSimp name2
+  if simplc.checkWhitelist.get (← getOptions) then
+    let sthms : SimpTheorems ← SimpTheorems.addConst {} name2
+    let (_, badPairs) ← StateT.run (s := #[]) do
+      checkSimpLC false none (← mkSimpTheorem name1) sthms
+    if badPairs.isEmpty then
+      logWarning "No non-confluence detected. Maybe remove this?"
+      TryThis.addSuggestion cmdStx { suggestion := "", messageData? := m!"(remove this command)" }
+  let pair := if name2.quickLt name1 then (name2, name1) else (name1, name2)
   modifyEnv (simpLCWhitelistExt.addEntry · pair)
 
 open Elab Command
@@ -322,9 +329,10 @@ elab_rules : command
   checkSimpLCAll ⟨stx⟩ root?.isSome pfix
 
 | `(command|simp_lc whitelist $thm1 $thm2) => liftTermElabM do
+  let stx ← getRef
   let name1 ← realizeGlobalConstNoOverloadWithInfo thm1
   let name2 ← realizeGlobalConstNoOverloadWithInfo thm2
-  whiteListCriticalPair (name1, name2)
+  whiteListCriticalPair stx (name1, name2)
 
 | `(command|simp_lc ignore $thm) => liftTermElabM do
   ignoreName (← realizeGlobalConstNoOverloadWithInfo thm)
