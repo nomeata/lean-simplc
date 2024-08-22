@@ -46,7 +46,7 @@ The option `trace.simplc` enables more verbose tracing.
 The option `simplc.stderr` causes pairs to be printed on `stderr`; this can be useful to debug cases
 where the command crashes lean or runs forever.
 -/
-syntax "simp_lc " &"check " "root"? ("in " ident)? : command
+syntax "simp_lc " &"check " "root"? ("in " ident+)? : command
 
 /--
 The `simp_lc inspect thm1 thm2` command looks at critical pairs fromed by `thm1`  and `thm2`, and
@@ -278,7 +278,7 @@ def reportBadPairs  (cmdStx? : Option (TSyntax `command)) (act : M Unit) (stats 
       str := str ++ "\n" ++ (← PrettyPrinter.ppCategory `command cmdStx).pretty
       TryThis.addSuggestion cmdStx { suggestion := str, messageData? := m!"(lots of simp_lc_inspect lines)" }
 
-def checkSimpLCAll (cmdStx : TSyntax `command) (root_only : Bool) (pfix : Name) : MetaM Unit := do
+def checkSimpLCAll (cmdStx : TSyntax `command) (root_only : Bool) (pfixs? : Option (Array Name)) : MetaM Unit := do
   let sthms ← getSimpTheorems
   let thms := sthms.pre.values ++ sthms.post.values
   let thms ← thms.filterM fun sthm => do
@@ -287,8 +287,9 @@ def checkSimpLCAll (cmdStx : TSyntax `command) (root_only : Bool) (pfix : Name) 
     if let .decl n _ false := sthm.origin then
       if (← isIgnoredName n) then
         return false
-      if pfix.isPrefixOf n then
-        return true
+      if let some pfixs := pfixs? then
+        return pfixs.any (·.isPrefixOf n)
+      return true
     return false
   logInfo m!"Checking {thms.size} simp lemmas for critical pairs"
   let filtered_sthms := thms.foldl Lean.Meta.addSimpTheoremEntry (init := {})
@@ -328,12 +329,10 @@ elab_rules : command
   withOptions (·.setBool `trace.simplc true) do reportBadPairs .none do
     checkSimpLC false tac? (← mkSimpTheorem name1) sthms
 
-| `(command|simp_lc check $[root%$root?]? $[in $pfix?]?) => liftTermElabM do
+| `(command|simp_lc check $[root%$root?]? $[in $[$pfixs]*]?) => liftTermElabM do
   let stx ← getRef
-  let pfix := match pfix? with
-    | .some i => i.getId
-    | .none => .anonymous
-  checkSimpLCAll ⟨stx⟩ root?.isSome pfix
+  let pfixs := pfixs.map (·.map (·.getId))
+  checkSimpLCAll ⟨stx⟩ root?.isSome pfixs
 
 | `(command|simp_lc whitelist $thm1 $thm2) => liftTermElabM do
   let stx ← getRef
