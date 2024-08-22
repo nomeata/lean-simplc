@@ -123,10 +123,14 @@ structure CriticalPair where
 def CriticalPair.pp (cp : CriticalPair) : MetaM MessageData :=
   return m!"{← My.ppOrigin cp.thm1.origin} {← My.ppOrigin cp.thm2.origin} (at {cp.path})"
 
+abbrev M := StateT (Array CriticalPair) (StateT Nat MetaM)
+
+def M.run (a : M α) : MetaM ((α × Array CriticalPair) × Nat):= StateT.run (StateT.run a #[]) 0
+
 open Elab Tactic
 partial
-def checkSimpLC (root_only : Bool) (tac? : Option (TSyntax `Lean.Parser.Tactic.tacticSeq)) (thm1 : SimpTheorem) (thms : SimpTheorems) :
-    StateT (Array CriticalPair) MetaM Unit :=
+def checkSimpLC (root_only : Bool) (tac? : Option (TSyntax `Lean.Parser.Tactic.tacticSeq))
+    (thm1 : SimpTheorem) (thms : SimpTheorems) : M Unit :=
   withConfig (fun c => { c with etaStruct := .none }) do
   withCurrHeartbeats do
   let val1 ← thm1.getValue
@@ -139,7 +143,7 @@ def checkSimpLC (root_only : Bool) (tac? : Option (TSyntax `Lean.Parser.Tactic.t
   let (rewritten, Expr.mvar goal) ← Conv.mkConvGoalFor lhs1 | unreachable!
   -- logInfo m!"Initial goal: {goal}"
 
-  let rec go (path : List Nat) (cgoal : MVarId) : StateT (Array CriticalPair) MetaM Unit := do
+  let rec go (path : List Nat) (cgoal : MVarId) : M Unit := do
     let (t, _) ← Lean.Elab.Tactic.Conv.getLhsRhsCore cgoal
     if t.isMVar then
       -- logInfo m!"Ignoring metavariable {t} (kind: {repr (← t.mvarId!.getKind)})"
@@ -153,6 +157,7 @@ def checkSimpLC (root_only : Bool) (tac? : Option (TSyntax `Lean.Parser.Tactic.t
       if (← isCriticalPairWhitelisted (thm1.origin.key, thm2.origin.key)) then continue
       if path.isEmpty then
         unless thm1.origin.key.quickLt thm2.origin.key do continue
+      modifyThe Nat Nat.succ
       let good ← withoutModifingMVarAssignment do withCurrHeartbeats do
         if simplc.stderr.get (← getOptions) then
           IO.eprintln s!"{thm1.origin.key} {thm2.origin.key}"
@@ -258,8 +263,10 @@ def mkSimpTheorem (name : Name) : MetaM SimpTheorem := do
 def delabInspectCmd (cp : CriticalPair) : MetaM (TSyntax `command) := do
   `(command|simp_lc inspect $(mkIdent cp.thm1.origin.key) $(mkIdent cp.thm2.origin.key))
 
-def reportBadPairs (cmdStx? : Option (TSyntax `command)) (act : StateT (Array CriticalPair) MetaM Unit) : MetaM Unit := do
-  let (.unit, badPairs) ← StateT.run act #[]
+def reportBadPairs  (cmdStx? : Option (TSyntax `command)) (act : M Unit) (stats := false) : MetaM Unit := do
+  let ((.unit, badPairs), numPairs) ← M.run act
+  if stats then
+    logInfo m!"Investigated {numPairs} critical pairs"
   unless badPairs.isEmpty do
     logError <| m!"Found {badPairs.size} non-confluent critical pairs:" ++
       indentD (.joinSep ((← badPairs.mapM (·.pp)).toList) "\n")
@@ -287,7 +294,7 @@ def checkSimpLCAll (cmdStx : TSyntax `command) (root_only : Bool) (pfix : Name) 
   let filtered_sthms := thms.foldl Lean.Meta.addSimpTheoremEntry (init := {})
   -- logInfo m!"{names}"
   -- let thms := thms[:104] ++ thms[105:]
-  reportBadPairs cmdStx do
+  reportBadPairs (stats := true) cmdStx do
     for thm1 in thms do
       try
         checkSimpLC root_only .none thm1 filtered_sthms
@@ -304,7 +311,7 @@ def whiteListCriticalPair (cmdStx : Syntax) : NamePair → MetaM Unit := fun ⟨
   warnIfNotSimp name2
   if simplc.checkWhitelist.get (← getOptions) then
     let sthms : SimpTheorems ← SimpTheorems.addConst {} name2
-    let (_, badPairs) ← StateT.run (s := #[]) do
+    let ((.unit, badPairs), _) ← M.run do
       checkSimpLC false none (← mkSimpTheorem name1) sthms
     if badPairs.isEmpty then
       logWarning "No non-confluence detected. Maybe remove this?"

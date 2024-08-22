@@ -59,7 +59,7 @@ simp_lc whitelist Bool.not_not_eq Bool.not_eq_not
 
 -- set_option simplc.stderr true in
 
--- simp_lc check root in List
+simp_lc check root in List
 
 
 #exit
