@@ -39,7 +39,8 @@ this”-suggestion to insert `simp_lc whitelist` commands for all of them.
 With `simp_lc check root` only critical paris where both lemmas rewrite at the same position are
 considered.
 
-With `simp_lc check in Foo` only lemmas whose name has `Foo.` as a prefix are considered.
+With `simp_lc check in Foo` only lemmas whose name has `Foo.` as a prefix are considered. The syntax
+`in _root_` can be used to select lemmas in no namespace.
 
 The option `trace.simplc` enables more verbose tracing.
 
@@ -288,7 +289,10 @@ def checkSimpLCAll (cmdStx : TSyntax `command) (root_only : Bool) (pfixs? : Opti
       if (← isIgnoredName n) then
         return false
       if let some pfixs := pfixs? then
-        return pfixs.any (·.isPrefixOf n)
+        return pfixs.any fun pfix =>
+          if pfix = `_root_
+          then n.components.length = 1
+          else pfix.isPrefixOf n
       return true
     return false
   logInfo m!"Checking {thms.size} simp lemmas for critical pairs"
