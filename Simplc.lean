@@ -154,7 +154,6 @@ def checkSimpLC (root_only : Bool) (tac? : Option (TSyntax `Lean.Parser.Tactic.t
     for thm2 in matchs do
       let critPair : CriticalPair := ⟨thm1, thm2, path⟩
       if thms.erased.contains thm2.origin then continue
-      if (← isIgnoredName thm2.origin.key) then continue
       if (← isCriticalPairWhitelisted (thm1.origin.key, thm2.origin.key)) then continue
       if path.isEmpty then
         unless thm1.origin.key.quickLt thm2.origin.key do continue
